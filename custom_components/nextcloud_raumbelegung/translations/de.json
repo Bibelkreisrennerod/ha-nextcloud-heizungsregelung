@@ -1,0 +1,50 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Nextcloud verbinden",
+        "description": "Zugang zu der Nextcloud, in der die Räume gebucht werden. Am besten ein eigener Benutzer mit Leserechten und ein App-Passwort (Nextcloud: Einstellungen > Sicherheit).",
+        "data": {
+          "url": "Adresse der Nextcloud",
+          "username": "Benutzername",
+          "password": "App-Passwort"
+        },
+        "data_description": {
+          "url": "Zum Beispiel https://cloud.example.org"
+        }
+      },
+      "calendars": {
+        "title": "Kalender auswählen",
+        "description": "Aus diesen Kalendern werden die Raumbuchungen gelesen. Übertragene Kalender tragen den Namen des Besitzers in Klammern.",
+        "data": {
+          "calendars": "Kalender"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nextcloud ist unter dieser Adresse nicht erreichbar.",
+      "invalid_auth": "Benutzername oder Passwort stimmt nicht.",
+      "no_calendars": "Für diesen Benutzer wurden keine Kalender gefunden.",
+      "no_selection": "Bitte mindestens einen Kalender auswählen.",
+      "unknown": "Unerwarteter Fehler, Details stehen im Protokoll."
+    },
+    "abort": {
+      "already_configured": "Diese Nextcloud ist mit diesem Benutzer bereits eingerichtet."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "heating_demand": {
+        "name": "Heizbedarf"
+      },
+      "occupied": {
+        "name": "Belegt"
+      }
+    },
+    "number": {
+      "preheat": {
+        "name": "Vorheizzeit"
+      }
+    }
+  }
+}

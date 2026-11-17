@@ -1,0 +1,121 @@
+"""Einrichtung ueber die Oberflaeche."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+import xml.etree.ElementTree as ET
+
+import voluptuous as vol
+
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+    TextSelector,
+    TextSelectorConfig,
+    TextSelectorType,
+)
+
+from .caldav import NextcloudAuthError, NextcloudClient, NextcloudError
+from .const import CONF_CALENDARS, DOMAIN
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _normalize_url(url: str) -> str:
+    url = url.strip().rstrip("/")
+    if "://" not in url:
+        url = "https://" + url
+    for suffix in ("/remote.php/dav", "/remote.php"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)]
+    return url
+
+
+class NextcloudRoomsConfigFlow(ConfigFlow, domain=DOMAIN):
+    """Zugangsdaten abfragen, dann Kalender auswaehlen."""
+
+    VERSION = 1
+
+    def __init__(self) -> None:
+        self._data: dict[str, Any] = {}
+        self._calendars: list[dict[str, str]] = []
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            url = _normalize_url(user_input[CONF_URL])
+            username = user_input[CONF_USERNAME].strip()
+            client = NextcloudClient(
+                async_get_clientsession(self.hass), url, username, user_input[CONF_PASSWORD]
+            )
+            try:
+                self._calendars = await client.async_discover_calendars()
+            except NextcloudAuthError:
+                errors["base"] = "invalid_auth"
+            except (NextcloudError, ET.ParseError):
+                errors["base"] = "cannot_connect"
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Unerwarteter Fehler bei der Einrichtung")
+                errors["base"] = "unknown"
+            else:
+                if not self._calendars:
+                    errors["base"] = "no_calendars"
+                else:
+                    await self.async_set_unique_id(f"{url}|{username}".lower())
+                    self._abort_if_unique_id_configured()
+                    self._data = {
+                        CONF_URL: url,
+                        CONF_USERNAME: username,
+                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                    }
+                    return await self.async_step_calendars()
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_URL): TextSelector(TextSelectorConfig(type=TextSelectorType.URL)),
+                vol.Required(CONF_USERNAME): TextSelector(),
+                vol.Required(CONF_PASSWORD): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
+            }
+        )
+        return self.async_show_form(
+            step_id="user",
+            data_schema=self.add_suggested_values_to_schema(schema, user_input or {}),
+            errors=errors,
+        )
+
+    async def async_step_calendars(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            chosen = [cal for cal in self._calendars if cal["url"] in user_input[CONF_CALENDARS]]
+            if chosen:
+                self._data[CONF_CALENDARS] = chosen
+                return self.async_create_entry(
+                    title=f"Nextcloud ({self._data[CONF_USERNAME]})", data=self._data
+                )
+            errors["base"] = "no_selection"
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_CALENDARS): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(value=cal["url"], label=cal["name"])
+                            for cal in self._calendars
+                        ],
+                        multiple=True,
+                        mode=SelectSelectorMode.LIST,
+                    )
+                )
+            }
+        )
+        return self.async_show_form(step_id="calendars", data_schema=schema, errors=errors)

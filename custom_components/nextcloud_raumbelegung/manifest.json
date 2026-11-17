@@ -1,0 +1,12 @@
+{
+  "domain": "nextcloud_raumbelegung",
+  "name": "Nextcloud Raumbelegung",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/Bibelkreisrennerod/ha-nextcloud-raumbelegung",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/Bibelkreisrennerod/ha-nextcloud-raumbelegung/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
