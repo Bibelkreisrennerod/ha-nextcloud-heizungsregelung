@@ -10,8 +10,46 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.1.0, Prototyp. Die Kalenderauswertung ist getestet, der
-> Betrieb in Home Assistant noch nicht.
+> Stand: Version 0.2.0. Planer und Lernmodell sind mit Simulationen getestet,
+> der Betrieb mit echten Thermostaten steht noch aus.
+
+## Was die Steuerung macht
+
+- **Planen:** Für jeden gebuchten Raum berechnet sie, wie lange er zum
+  Aufheizen braucht, und startet rechtzeitig, damit er 15 Minuten vor
+  Terminbeginn warm ist (Komforttemperatur minus 0,5 K).
+- **Lernen:** Jeder Aufheizvorgang wird gemessen. Daraus lernt sie je Raum
+  Aufheizrate und Wärmeverlust, abhängig von der Außentemperatur samt
+  Wetterprognose. Ein Sicherheitszuschlag passt sich so an, dass rund
+  95 % der Termine pünktlich warm sind. Am Anfang gilt der eingestellte
+  Startwert; er wird je gemessenem Vorgang um höchstens 10 % unterschritten.
+- **Kesselengpass:** Jeder Raum hat ein Lastgewicht, der Kessel ein
+  Lastbudget. Mehr Räume als das Budget erlaubt heizen nie gleichzeitig auf;
+  die Steuerung staffelt stattdessen früher. Fällt die Vorlauftemperatur
+  (optional) zehn Minuten unter die Schwelle, pausiert sie den Raum mit dem
+  größten Zeitpuffer für 20 Minuten.
+- **Funkkontingent:** Sie sendet nur echte Änderungen, höchstens alle
+  3 Minuten je Raum. Ist der Duty Cycle des Homematic Access Points über
+  70 %, sendet sie nur noch Aufheiz-Befehle.
+- **Handverstellung:** Wer während eines Termins am Thermostat dreht, behält
+  seinen Wert bis Terminende (außerhalb von Terminen 2 Stunden). Solche
+  Vorgänge zählen nicht zum Lernen.
+- **Ausfallsicherheit:** Die Thermostate laufen im Homematic-Automodus mit
+  einem flachen Profil auf Absenktemperatur. Ein Sollwert dieser Steuerung
+  gilt nur bis zum nächsten Profil-Schaltpunkt; setzt das Profil ihn
+  während einer Heizphase zurück, sendet die Steuerung ihn erneut. Fällt
+  Home Assistant aus, kühlen die Räume von selbst auf Absenktemperatur ab.
+
+## Voraussetzungen in Homematic IP
+
+1. Je Raum eine Heizgruppe mit allen Thermostaten (und ggf. dem
+   Thermometer) des Raums. Home Assistant zeigt sie als eine
+   `climate`-Entität.
+2. Die Gruppe in Home Assistant dem Bereich mit **genau dem Namen der
+   Nextcloud-Ressource** zuordnen (z. B. „Saal“).
+3. In der Homematic-App ein Heizprofil mit durchgehend Absenktemperatur
+   (14 °C) und Schaltpunkten etwa alle 3 Stunden; Gruppen im Automodus.
+4. Temperatur-Offsets direkt in der Homematic-App einstellen.
 
 ## Installation
 
@@ -35,13 +73,26 @@ Voraussetzung: Home Assistant 2026.11 oder neuer (Marketplace).
 
 ## Was angelegt wird
 
-Je Raum entsteht ein Gerät mit drei Entitäten:
+Je Raum ein Gerät:
 
 | Entität | Bedeutung |
 | --- | --- |
-| Heizbedarf | An ab „Vorheizzeit“ vor Terminbeginn bis Terminende |
-| Belegt | An, solange ein Termin im Raum läuft |
-| Vorheizzeit | Minuten Vorlauf, einstellbar von 0 bis 240, Standard 60 |
+| Heizbedarf | An, solange die Steuerung den Raum aufheizt, warm hält oder ein Termin läuft |
+| Belegt | An, solange laut Kalender ein Termin läuft |
+| Vorheizzeit | Gelernte Vorheizzeit für den nächsten Termin (mit Zuschlag) |
+| Geplanter Heizstart | Wann das Aufheizen beginnt |
+| Raumtemperatur | Temperatur, mit der die Steuerung rechnet |
+| Heizprotokoll | Letzte Heizvorgänge mit Start, erreicht um, Abweichung zur Frist |
+| Komforttemperatur | Zieltemperatur während Terminen (Standard 21 °C) |
+| Vorheizzeit Startwert | Startwert für 14 → 21 °C bei 0 °C außen (Standard 120 min) |
+| Lastgewicht | Anteil am Kesselbudget während des Aufheizens (Standard 0,5) |
+| Vorrang | 1 = höchster; entscheidet bei Engpässen |
+| Automatik | Aus: Thermostate dieses Raums werden nicht gesteuert |
+
+Dazu ein Gerät „Heizungssteuerung“ mit Status, Absenktemperatur (14 °C),
+Lastbudget (1,0), Vorlauf-Schwelle (45 °C) und dem globalen Schalter
+„Automatik“. In den Optionen der Integration lassen sich Wetter-Entität,
+Vorlauf-Sensor, Außentemperatur-Sensor und Duty-Cycle-Sensor wählen.
 
 Räume werden aus den in Nextcloud angelegten Ressourcen und aus den Terminen
 selbst übernommen. Neue Räume erscheinen automatisch. Die Attribute der
@@ -50,29 +101,14 @@ Sensoren zeigen den laufenden oder nächsten Termin (`event`, `start`, `end`,
 
 ## Verhalten
 
-- Abruf alle 5 Minuten, Zeitfenster von gestern bis 7 Tage voraus.
+- Abruf der Termine alle 5 Minuten, Zeitfenster von gestern bis 7 Tage voraus; die Steuerung rechnet jede Minute.
 - Serientermine werden von Nextcloud aufgelöst, Ausnahmen einzelner Termine
   sind berücksichtigt.
 - Abgesagte Termine und abgelehnte Raumbuchungen zählen nicht.
 - Ganztägige Termine zählen nicht.
-- Ist Nextcloud nicht erreichbar, werden die Sensoren „nicht verfügbar“. Eine
-  Automation sollte diesen Zustand wie „aus“ behandeln oder melden.
-
-## Beispiel-Automation
-
-```yaml
-automation:
-  - alias: Heizung Saal nach Kalender
-    triggers:
-      - trigger: state
-        entity_id: binary_sensor.saal_heizbedarf
-    actions:
-      - action: climate.set_temperature
-        target:
-          entity_id: climate.saal
-        data:
-          temperature: "{{ 21 if trigger.to_state.state == 'on' else 16 }}"
-```
+- Ist Nextcloud über 30 Minuten nicht erreichbar, plant die Steuerung mit dem
+  letzten Stand weiter und meldet das unter „Benachrichtigungen“. Ebenso
+  gemeldet werden verspätet warme Räume und ein knappes Funkkontingent.
 
 ## Entfernen
 

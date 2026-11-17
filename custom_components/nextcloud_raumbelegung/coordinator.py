@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
@@ -32,7 +33,10 @@ class RuntimeData:
     """Laufzeitdaten eines Eintrags."""
 
     coordinator: RoomCoordinator
-    preheat: dict[str, float] = field(default_factory=dict)
+    # Einstellungen aus den Zahlen- und Schalter-Entitaeten:
+    # (Raum oder None fuer global, Schluessel) -> Wert
+    settings: dict[tuple[str | None, str], float] = field(default_factory=dict)
+    controller: Any = None  # HeatingController, gesetzt in __init__.py
 
 
 class RoomCoordinator(DataUpdateCoordinator[RoomData]):

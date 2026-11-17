@@ -43,7 +43,64 @@
     },
     "number": {
       "preheat": {
+        "name": "Vorheizzeit Startwert"
+      },
+      "comfort": {
+        "name": "Komforttemperatur"
+      },
+      "weight": {
+        "name": "Lastgewicht"
+      },
+      "priority": {
+        "name": "Vorrang"
+      },
+      "setback": {
+        "name": "Absenktemperatur"
+      },
+      "budget": {
+        "name": "Lastbudget"
+      },
+      "flow_threshold": {
+        "name": "Vorlauf-Schwelle"
+      }
+    },
+    "switch": {
+      "automatic": {
+        "name": "Automatik"
+      },
+      "global_automatic": {
+        "name": "Automatik"
+      }
+    },
+    "sensor": {
+      "lead": {
         "name": "Vorheizzeit"
+      },
+      "planned_start": {
+        "name": "Geplanter Heizstart"
+      },
+      "room_temperature": {
+        "name": "Raumtemperatur"
+      },
+      "protocol": {
+        "name": "Heizprotokoll"
+      },
+      "global_status": {
+        "name": "Status"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Messwerte für die Steuerung",
+        "description": "Alle Angaben sind optional. Ohne Vorlauf-Sensor plant die Steuerung nur mit dem Lastbudget. Die Außentemperatur kommt sonst aus der Wetter-Entität, der Duty Cycle wird bei Homematic IP automatisch gefunden.",
+        "data": {
+          "weather_entity": "Wetter (Prognose)",
+          "flow_sensor": "Vorlauftemperatur",
+          "outside_sensor": "Außentemperatur (statt Wetter)",
+          "duty_cycle_sensor": "Duty Cycle Access Point"
+        }
       }
     }
   }

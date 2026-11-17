@@ -43,7 +43,64 @@
     },
     "number": {
       "preheat": {
+        "name": "Initial preheat time"
+      },
+      "comfort": {
+        "name": "Comfort temperature"
+      },
+      "weight": {
+        "name": "Load weight"
+      },
+      "priority": {
+        "name": "Priority"
+      },
+      "setback": {
+        "name": "Setback temperature"
+      },
+      "budget": {
+        "name": "Load budget"
+      },
+      "flow_threshold": {
+        "name": "Flow threshold"
+      }
+    },
+    "switch": {
+      "automatic": {
+        "name": "Automatic"
+      },
+      "global_automatic": {
+        "name": "Automatic"
+      }
+    },
+    "sensor": {
+      "lead": {
         "name": "Preheat time"
+      },
+      "planned_start": {
+        "name": "Planned heating start"
+      },
+      "room_temperature": {
+        "name": "Room temperature"
+      },
+      "protocol": {
+        "name": "Heating log"
+      },
+      "global_status": {
+        "name": "Status"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Measurements for the control",
+        "description": "All optional. Without a flow sensor the control plans with the load budget only.",
+        "data": {
+          "weather_entity": "Weather (forecast)",
+          "flow_sensor": "Flow temperature",
+          "outside_sensor": "Outside temperature (instead of weather)",
+          "duty_cycle_sensor": "Access point duty cycle"
+        }
       }
     }
   }

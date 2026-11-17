@@ -8,10 +8,13 @@ import xml.etree.ElementTree as ET
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_PASSWORD, CONF_URL, CONF_USERNAME
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -22,7 +25,15 @@ from homeassistant.helpers.selector import (
 )
 
 from .caldav import NextcloudAuthError, NextcloudClient, NextcloudError
-from .const import CONF_CALENDARS, DOMAIN
+from .const import (
+    CONF_CALENDARS,
+    CONF_DUTY_CYCLE_SENSOR,
+    CONF_FLOW_SENSOR,
+    CONF_OUTSIDE_SENSOR,
+    CONF_WEATHER,
+    DEFAULT_WEATHER,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +52,11 @@ class NextcloudRoomsConfigFlow(ConfigFlow, domain=DOMAIN):
     """Zugangsdaten abfragen, dann Kalender auswaehlen."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
+        return NextcloudRoomsOptionsFlow()
 
     def __init__(self) -> None:
         self._data: dict[str, Any] = {}
@@ -119,3 +135,26 @@ class NextcloudRoomsConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="calendars", data_schema=schema, errors=errors)
+
+
+class NextcloudRoomsOptionsFlow(OptionsFlow):
+    """Messwerte fuer die Steuerung: Vorlauf, Aussentemperatur, Wetter, Duty Cycle."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+        options = self.config_entry.options
+        sensor = EntitySelector(EntitySelectorConfig(domain="sensor"))
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_WEATHER, default=options.get(CONF_WEATHER, DEFAULT_WEATHER)
+                ): EntitySelector(EntitySelectorConfig(domain="weather")),
+                vol.Optional(CONF_FLOW_SENSOR): sensor,
+                vol.Optional(CONF_OUTSIDE_SENSOR): sensor,
+                vol.Optional(CONF_DUTY_CYCLE_SENSOR): sensor,
+            }
+        )
+        return self.async_show_form(
+            step_id="init", data_schema=self.add_suggested_values_to_schema(schema, options)
+        )
