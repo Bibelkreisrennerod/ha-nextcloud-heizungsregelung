@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.2.6. Planer und Lernmodell sind mit Simulationen getestet,
+> Stand: Version 0.2.7. Planer und Lernmodell sind mit Simulationen getestet,
 > der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -48,11 +48,11 @@ Nextcloud direkt ab.
   (Automodus neu gesetzt). Solange sie aus ist, beobachtet sie die
   Aufheizvorgänge des Profils und lernt daraus; im Heizprotokoll stehen sie
   als „Homematic-Profil“.
-- **Ausfallsicherheit:** Die Thermostate laufen im Homematic-Automodus mit
-  einem flachen Profil auf Absenktemperatur. Ein Sollwert dieser Steuerung
-  gilt nur bis zum nächsten Profil-Schaltpunkt; setzt das Profil ihn
-  während einer Heizphase zurück, sendet die Steuerung ihn erneut. Fällt
-  Home Assistant aus, kühlen die Räume von selbst auf Absenktemperatur ab.
+- **Betriebsart der Thermostate:** Solange die Automatik an ist, stellt die
+  Steuerung die gesteuerten Heizgruppen auf „Manuell“; das Homematic-Profil
+  greift dann nicht ein. Fällt Home Assistant aus, bleibt der letzte
+  Sollwert stehen. Beim Ausschalten der Automatik gehen die Gruppen zurück
+  in den Automodus, und das bisherige Homematic-Profil gilt sofort.
 
 ## Voraussetzungen in Homematic IP
 
@@ -61,8 +61,8 @@ Nextcloud direkt ab.
    `climate`-Entität.
 2. Die Gruppe in Home Assistant dem Bereich mit **genau dem Namen der
    Nextcloud-Ressource** zuordnen (z. B. „Saal“).
-3. In der Homematic-App ein Heizprofil mit durchgehend Absenktemperatur
-   (14 °C) und Schaltpunkten etwa alle 3 Stunden; Gruppen im Automodus.
+3. Das bisherige Heizprofil kann bleiben: Es gilt immer dann, wenn die
+   Automatik aus ist.
 4. Temperatur-Offsets direkt in der Homematic-App einstellen.
 
 ## Installation

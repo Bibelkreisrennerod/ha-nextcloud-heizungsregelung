@@ -8,11 +8,11 @@ Ablauf je Takt (jede Minute):
  4. Je Raum den gewuenschten Sollwert bestimmen und nur bei Abweichung senden.
  5. Aufheizvorgaenge protokollieren und daraus lernen.
 
-Die Thermostate laufen im Homematic-Automodus mit flachem Absenkprofil.
-Ein Sollwert von hier gilt dort nur bis zum naechsten Profil-Schaltpunkt.
-Faellt Home Assistant aus, kehren die Raeume so von selbst zur
-Absenktemperatur zurueck. Setzt das Profil den Sollwert waehrend einer
-Heizphase zurueck, sendet die Steuerung ihn erneut.
+Solange die Automatik an ist, stehen die gesteuerten Heizgruppen im
+Homematic-Modus "Manuell" (hvac_mode "heat"): das Homematic-Profil greift
+dann nicht ein. Wird die Automatik ausgeschaltet, setzt die Steuerung die
+Gruppen zurueck in den Automodus, und das bisherige Homematic-Profil gilt
+sofort wieder. Faellt Home Assistant aus, bleibt der letzte Sollwert stehen.
 """
 
 from __future__ import annotations
@@ -152,6 +152,7 @@ class RoomState:
     last_command: float | None = None
     last_command_at: datetime | None = None
     before_command: float | None = None  # Sollwert vor unserem letzten Befehl
+    mode_command_at: datetime | None = None  # letztes Umschalten auf Manuell
     manual_until: datetime | None = None
     paused_until: datetime | None = None
     cycle: Cycle | None = None
@@ -238,11 +239,7 @@ class HeatingController:
         self._first_tick = True
 
     async def async_suspend(self, room: str | None) -> None:
-        """Automatik aus: Thermostate sofort wieder ihrem Homematic-Profil ueberlassen.
-
-        Ein Sollwert dieser Steuerung gilt im Automodus nur voruebergehend.
-        Das erneute Setzen des Automodus beendet ihn sofort.
-        """
+        """Automatik aus: Heizgruppen zurueck in den Automodus, das Homematic-Profil gilt sofort."""
         for name, state in self.rooms.items():
             if room is not None and name != room:
                 continue
@@ -260,6 +257,7 @@ class HeatingController:
             state.last_command = None
             state.before_command = None
             state.manual_until = None
+            state.mode_command_at = None
 
     @callback
     def request_update(self) -> None:
@@ -494,6 +492,7 @@ class HeatingController:
             mode, desired = self._desired(now, room, state, info, plans.get(room), setback)
             info["mode"] = mode
             if desired is not None and info["climates"]:
+                await self._ensure_manual(now, room, state, info)
                 await self._apply(now, room, state, info, desired, setback, duty)
             if mode == "aus" and info["climates"]:
                 self._observe(now, room, state, info, setback, outside)
@@ -561,6 +560,29 @@ class HeatingController:
         if planned is not None and planned.start <= now:
             return "aufheizen", comfort
         return "abgesenkt", setback
+
+    async def _ensure_manual(
+        self, now: datetime, room: str, state: RoomState, info: dict[str, Any]
+    ) -> None:
+        """Gesteuerte Heizgruppen in den Modus "Manuell" bringen (Profil greift nicht)."""
+        auto = []
+        for entity_id in info["climates"]:
+            current = self.hass.states.get(entity_id)
+            if current is not None and current.state not in ("heat", STATE_UNAVAILABLE, STATE_UNKNOWN):
+                auto.append(entity_id)
+        if not auto:
+            return
+        if state.mode_command_at is not None and now - state.mode_command_at < MIN_COMMAND_GAP:
+            return
+        state.mode_command_at = now
+        try:
+            await self.hass.services.async_call(
+                "climate", "set_hvac_mode", {"entity_id": auto, "hvac_mode": "heat"}, blocking=True
+            )
+            self._sent.append(now)
+            _LOGGER.info("%s: Heizgruppe auf Manuell gestellt", room)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("%s: Umschalten auf Manuell fehlgeschlagen: %s", room, err)
 
     async def _apply(
         self,
