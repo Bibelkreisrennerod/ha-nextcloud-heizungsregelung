@@ -12,6 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
+from .const import CONF_STOKERCLOUD
 from .entity import StatusEntity, add_room_entities
 
 PROTOCOL_ROWS = 20
@@ -29,7 +30,18 @@ async def async_setup_entry(
             RoomTemperatureSensor(entry, room),
             ProtocolSensor(entry, room),
         ],
-        [ControlStatusSensor(entry, None, "status")],
+        [ControlStatusSensor(entry, None, "status")]
+        + (
+            [
+                BoilerSensor(entry, "boiler_flow", "flow"),
+                BoilerSensor(entry, "boiler_dhw", "dhw"),
+                BoilerSensor(entry, "boiler_power", "power"),
+                BoilerUpdatedSensor(entry, None, "boiler_updated"),
+                BoilerStateSensor(entry, None, "boiler_state"),
+            ]
+            if entry.options.get(CONF_STOKERCLOUD)
+            else []
+        ),
     )
 
 
@@ -142,4 +154,69 @@ class ControlStatusSensor(StatusEntity, SensorEntity):
             "vorlauf": status.get("vorlauf"),
             "duty_cycle": status.get("duty_cycle"),
             "lastbudget": status.get("budget"),
+        }
+
+
+class BoilerSensor(StatusEntity, SensorEntity):
+    """Ein Kesselwert aus StokerCloud (nur aktuelle Werte, sonst unbekannt)."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, entry: ConfigEntry, key: str, field: str) -> None:
+        super().__init__(entry, None, key)
+        self._field = field
+        if field == "power":
+            self._attr_native_unit_of_measurement = "%"
+            self._attr_icon = "mdi:fire"
+        else:
+            self._attr_device_class = SensorDeviceClass.TEMPERATURE
+            self._attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+
+    @property
+    def native_value(self) -> float | None:
+        boiler = self._controller.boiler if self._controller else None
+        if boiler is None or boiler.stale:
+            return None
+        return getattr(boiler, self._field)
+
+
+class BoilerUpdatedSensor(StatusEntity, SensorEntity):
+    """Zeitpunkt der letzten Meldung des Kessels an StokerCloud."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    @property
+    def native_value(self) -> datetime | None:
+        boiler = self._controller.boiler if self._controller else None
+        return boiler.updated if boiler else None
+
+
+class BoilerStateSensor(StatusEntity, SensorEntity):
+    """Kesselstatus; Attribute enthalten alle gelesenen Rohwerte zur Pruefung."""
+
+    _attr_icon = "mdi:fire-circle"
+    _unrecorded_attributes = frozenset({"rohwerte"})
+
+    @property
+    def native_value(self) -> str | None:
+        controller = self._controller
+        if controller is None:
+            return None
+        if controller.boiler is None:
+            return "keine Verbindung" if controller._boiler_error else None
+        if controller.boiler.stale:
+            return "keine aktuellen Daten"
+        return controller.boiler.state or "verbunden"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        controller = self._controller
+        boiler = controller.boiler if controller else None
+        return {
+            "fehler": controller._boiler_error if controller else None,
+            "vorlauf_gelesen": boiler.flow if boiler else None,
+            "rohwerte": {
+                key: f"{item.get('value')} {item.get('unit') or ''}".strip()
+                for key, item in (boiler.values.items() if boiler else [])
+            },
         }

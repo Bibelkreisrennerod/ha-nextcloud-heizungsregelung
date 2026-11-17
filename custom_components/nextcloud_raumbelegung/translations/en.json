@@ -87,6 +87,21 @@
       },
       "global_status": {
         "name": "Status"
+      },
+      "global_boiler_flow": {
+        "name": "Boiler flow"
+      },
+      "global_boiler_dhw": {
+        "name": "Boiler hot water"
+      },
+      "global_boiler_power": {
+        "name": "Boiler power"
+      },
+      "global_boiler_updated": {
+        "name": "Boiler last report"
+      },
+      "global_boiler_state": {
+        "name": "Boiler state"
       }
     }
   },
@@ -99,7 +114,11 @@
           "weather_entity": "Weather (forecast)",
           "flow_sensor": "Flow temperature",
           "outside_sensor": "Outside temperature (instead of weather)",
-          "duty_cycle_sensor": "Access point duty cycle"
+          "duty_cycle_sensor": "Access point duty cycle",
+          "stokercloud_name": "StokerCloud name (read only)"
+        },
+        "data_description": {
+          "stokercloud_name": "Name from the public view address. No password needed."
         }
       }
     }

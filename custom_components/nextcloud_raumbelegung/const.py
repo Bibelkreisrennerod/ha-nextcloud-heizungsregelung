@@ -9,12 +9,15 @@ CONF_FLOW_SENSOR = "flow_sensor"
 CONF_OUTSIDE_SENSOR = "outside_sensor"
 CONF_WEATHER = "weather_entity"
 CONF_DUTY_CYCLE_SENSOR = "duty_cycle_sensor"
+CONF_STOKERCLOUD = "stokercloud_name"
 
 DEFAULT_WEATHER = "weather.home"
 
 UPDATE_INTERVAL = timedelta(minutes=5)  # Abruf Nextcloud
 CONTROL_INTERVAL = timedelta(minutes=1)  # Takt der Steuerung
 FORECAST_INTERVAL = timedelta(minutes=30)
+BOILER_INTERVAL = timedelta(minutes=5)  # Abruf StokerCloud
+BOILER_ALERT_AFTER = timedelta(hours=2)
 DAYS_BACK = 1
 DAYS_AHEAD = 7
 

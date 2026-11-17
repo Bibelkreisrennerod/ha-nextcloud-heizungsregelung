@@ -30,6 +30,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
@@ -37,6 +38,9 @@ from homeassistant.util import dt as dt_util
 
 from .caldav import RoomEvent
 from .const import (
+    BOILER_ALERT_AFTER,
+    BOILER_INTERVAL,
+    CONF_STOKERCLOUD,
     CONF_DUTY_CYCLE_SENSOR,
     CONF_FLOW_SENSOR,
     CONF_OUTSIDE_SENSOR,
@@ -62,6 +66,7 @@ from .const import (
 )
 from .model import RoomModel
 from .planner import Job, Plan, plan
+from .stokercloud import StokerCloudClient, StokerCloudError, StokerData
 
 _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
@@ -164,6 +169,13 @@ class HeatingController:
         self._flow_low_since: datetime | None = None
         self._source_failed_since: datetime | None = None
         self._first_tick = True
+        name = (entry.options.get(CONF_STOKERCLOUD) or "").strip()
+        self._boiler_client = (
+            StokerCloudClient(async_get_clientsession(hass), name) if name else None
+        )
+        self.boiler: StokerData | None = None
+        self._boiler_at: datetime | None = None
+        self._boiler_error: str | None = None
         self._unsub: Callable[[], None] | None = None
         self._lock = asyncio.Lock()
 
@@ -289,6 +301,36 @@ class HeatingController:
         if points:
             self._forecast = sorted(points)
 
+    async def _refresh_boiler(self, now: datetime) -> None:
+        """Kesselwerte aus StokerCloud lesen (nur lesend, alle 5 Minuten)."""
+        if self._boiler_client is None:
+            return
+        if self._boiler_at and now - self._boiler_at < BOILER_INTERVAL:
+            return
+        self._boiler_at = now
+        try:
+            self.boiler = await self._boiler_client.async_read(
+                now, dt_util.get_default_time_zone()
+            )
+            self._boiler_error = None
+        except StokerCloudError as err:
+            self._boiler_error = str(err)
+            _LOGGER.debug("StokerCloud: %s", err)
+        boiler = self.boiler
+        last = boiler.updated if boiler else None
+        if self._boiler_error or (boiler is not None and boiler.stale):
+            since = last or now
+            if now - since >= BOILER_ALERT_AFTER or (self._boiler_error and boiler is None):
+                when = dt_util.as_local(last).strftime("%d.%m. %H:%M") if last else "unbekannt"
+                self._notify(
+                    "boiler",
+                    "Kessel liefert keine Daten",
+                    f"StokerCloud meldet keine aktuellen Werte (letzte Meldung: {when}). "
+                    "Die Steuerung plant ohne Vorlauftemperatur nur mit dem Lastbudget.",
+                )
+        else:
+            self._dismiss("boiler")
+
     def _outside_function(self, start: datetime, fallback: float) -> Callable[[float], float]:
         """Aussentemperatur in 'Minuten ab start' laut Prognose."""
         points = self._forecast
@@ -324,6 +366,7 @@ class HeatingController:
         if data is None:
             return
         await self._refresh_forecast(now)
+        await self._refresh_boiler(now)
         self._check_sources(now)
 
         global_on = self.enabled(None)
@@ -332,6 +375,8 @@ class HeatingController:
         outside = self._outside_now()
         outside_value = outside if outside is not None else 0.0
         flow = _float(self.hass, self.entry.options.get(CONF_FLOW_SENSOR))
+        if flow is None and self.boiler is not None and not self.boiler.stale:
+            flow = self.boiler.flow
         duty = self._duty_cycle()
         flow_low = self._update_flow(now, flow)
 
@@ -415,6 +460,7 @@ class HeatingController:
             "automatik": global_on,
             "aussen": outside,
             "vorlauf": flow,
+            "kessel_aktuell": self.boiler is not None and not self.boiler.stale,
             "vorlauf_niedrig": flow_low,
             "duty_cycle": duty,
             "budget": budget,

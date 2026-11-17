@@ -87,6 +87,21 @@
       },
       "global_status": {
         "name": "Status"
+      },
+      "global_boiler_flow": {
+        "name": "Kessel Vorlauf"
+      },
+      "global_boiler_dhw": {
+        "name": "Kessel Warmwasser"
+      },
+      "global_boiler_power": {
+        "name": "Kessel Leistung"
+      },
+      "global_boiler_updated": {
+        "name": "Kessel letzte Meldung"
+      },
+      "global_boiler_state": {
+        "name": "Kessel Status"
       }
     }
   },
@@ -94,12 +109,16 @@
     "step": {
       "init": {
         "title": "Messwerte für die Steuerung",
-        "description": "Alle Angaben sind optional. Ohne Vorlauf-Sensor plant die Steuerung nur mit dem Lastbudget. Die Außentemperatur kommt sonst aus der Wetter-Entität, der Duty Cycle wird bei Homematic IP automatisch gefunden.",
+        "description": "Alle Angaben sind optional. Die Vorlauftemperatur kommt aus StokerCloud oder einem gewählten Sensor; ohne beides plant die Steuerung nur mit dem Lastbudget. Die Außentemperatur kommt sonst aus der Wetter-Entität, der Duty Cycle wird bei Homematic IP automatisch gefunden.",
         "data": {
           "weather_entity": "Wetter (Prognose)",
           "flow_sensor": "Vorlauftemperatur",
           "outside_sensor": "Außentemperatur (statt Wetter)",
-          "duty_cycle_sensor": "Duty Cycle Access Point"
+          "duty_cycle_sensor": "Duty Cycle Access Point",
+          "stokercloud_name": "StokerCloud-Anlagenname (nur lesen)"
+        },
+        "data_description": {
+          "stokercloud_name": "Name aus der Adresse der öffentlichen Ansicht, z. B. „nawatec“ bei stokercloud.dk/dev/nawatec.html. Kein Passwort nötig. Ein gewählter Vorlauf-Sensor hat Vorrang."
         }
       }
     }

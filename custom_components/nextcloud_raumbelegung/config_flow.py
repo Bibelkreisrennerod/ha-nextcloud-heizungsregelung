@@ -28,6 +28,7 @@ from .caldav import NextcloudAuthError, NextcloudClient, NextcloudError
 from .const import (
     CONF_CALENDARS,
     CONF_DUTY_CYCLE_SENSOR,
+    CONF_STOKERCLOUD,
     CONF_FLOW_SENSOR,
     CONF_OUTSIDE_SENSOR,
     CONF_WEATHER,
@@ -150,6 +151,7 @@ class NextcloudRoomsOptionsFlow(OptionsFlow):
                 vol.Optional(
                     CONF_WEATHER, default=options.get(CONF_WEATHER, DEFAULT_WEATHER)
                 ): EntitySelector(EntitySelectorConfig(domain="weather")),
+                vol.Optional(CONF_STOKERCLOUD): TextSelector(),
                 vol.Optional(CONF_FLOW_SENSOR): sensor,
                 vol.Optional(CONF_OUTSIDE_SENSOR): sensor,
                 vol.Optional(CONF_DUTY_CYCLE_SENSOR): sensor,

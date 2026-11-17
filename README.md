@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.2.0. Planer und Lernmodell sind mit Simulationen getestet,
+> Stand: Version 0.2.1. Planer und Lernmodell sind mit Simulationen getestet,
 > der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -28,6 +28,12 @@ Nextcloud direkt ab.
   die Steuerung staffelt stattdessen früher. Fällt die Vorlauftemperatur
   (optional) zehn Minuten unter die Schwelle, pausiert sie den Raum mit dem
   größten Zeitpuffer für 20 Minuten.
+- **Kesseldaten (optional):** Mit dem StokerCloud-Anlagennamen (z. B.
+  „nawatec“ aus `stokercloud.dk/dev/nawatec.html`) liest die Integration
+  Vorlauf, Warmwasser, Leistung und Status des NBE-Kessels, nur lesend und
+  ohne Passwort. Werte, die älter als 30 Minuten sind, werden ignoriert;
+  liefert der Kessel länger als 2 Stunden keine Daten, gibt es eine Meldung.
+  Ein ausdrücklich gewählter Vorlauf-Sensor hat Vorrang.
 - **Funkkontingent:** Sie sendet nur echte Änderungen, höchstens alle
   3 Minuten je Raum. Ist der Duty Cycle des Homematic Access Points über
   70 %, sendet sie nur noch Aufheiz-Befehle.
