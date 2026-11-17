@@ -59,6 +59,10 @@ class AutomaticSwitch(SwitchEntity, RestoreEntity):
         self.async_write_ha_state()
         controller = self._entry.runtime_data.controller
         if controller is not None:
+            if value:
+                # Beim Wiedereinschalten stammen die aktuellen Sollwerte vom
+                # Homematic-Profil, nicht von einer Handverstellung.
+                controller.resume(self._room)
             controller.request_update()
 
     def _publish(self) -> None:

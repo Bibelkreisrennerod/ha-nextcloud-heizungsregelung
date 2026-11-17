@@ -223,6 +223,18 @@ class HeatingController:
         return self.models[room]
 
     @callback
+    def resume(self, room: str | None) -> None:
+        """Automatik wieder an: vorhandene Sollwerte nicht als Handverstellung werten."""
+        for name, state in self.rooms.items():
+            if room is None or name == room:
+                state.manual_until = None
+                state.last_command = None
+                state.before_command = None
+                if state.cycle is not None:
+                    state.cycle.counts = False
+        self._first_tick = True
+
+    @callback
     def request_update(self) -> None:
         """Nach Aenderung einer Einstellung sofort neu planen."""
         self.hass.async_create_task(self._async_tick(dt_util.utcnow()))
