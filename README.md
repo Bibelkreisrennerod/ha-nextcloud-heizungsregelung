@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.2.3. Planer und Lernmodell sind mit Simulationen getestet,
+> Stand: Version 0.2.6. Planer und Lernmodell sind mit Simulationen getestet,
 > der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -43,6 +43,11 @@ Nextcloud direkt ab.
 - **Handverstellung:** Wer während eines Termins am Thermostat dreht, behält
   seinen Wert bis Terminende (außerhalb von Terminen 2 Stunden). Solche
   Vorgänge zählen nicht zum Lernen.
+- **Automatik aus:** Schaltet man die Automatik (global oder je Raum) aus,
+  gibt die Steuerung die Thermostate sofort an ihr Homematic-Profil zurück
+  (Automodus neu gesetzt). Solange sie aus ist, beobachtet sie die
+  Aufheizvorgänge des Profils und lernt daraus; im Heizprotokoll stehen sie
+  als „Homematic-Profil“.
 - **Ausfallsicherheit:** Die Thermostate laufen im Homematic-Automodus mit
   einem flachen Profil auf Absenktemperatur. Ein Sollwert dieser Steuerung
   gilt nur bis zum nächsten Profil-Schaltpunkt; setzt das Profil ihn

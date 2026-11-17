@@ -110,6 +110,7 @@ class Cycle:
     counts: bool = True  # zaehlt fuers Lernen (nicht bei Handverstellung/Neustart)
     reached_at: datetime | None = None
     paused_minutes: float = 0.0
+    observed: bool = False  # Aufheizen durch das Homematic-Profil, nur beobachtet
     window: list[tuple[datetime, float, float]] = field(default_factory=list)
 
     def record(self, reason: str) -> dict[str, Any]:
@@ -120,11 +121,13 @@ class Cycle:
                 (self.reached_at - self.heat_start).total_seconds() / 60 - self.paused_minutes
             )
             late = round((self.reached_at - self.deadline).total_seconds() / 60)
+        if self.observed:
+            late = None
         return {
             "termin": self.event,
             "kalender": self.calendar,
             "beginn": dt_util.as_local(self.event_start).isoformat(timespec="minutes"),
-            "frist": dt_util.as_local(self.deadline).isoformat(timespec="minutes"),
+            "frist": None if self.observed else dt_util.as_local(self.deadline).isoformat(timespec="minutes"),
             "geplanter_start": dt_util.as_local(self.planned_start).isoformat(timespec="minutes"),
             "heizstart": dt_util.as_local(self.heat_start).isoformat(timespec="minutes"),
             "vorheizzeit_geplant": round(self.lead_minutes),
@@ -233,6 +236,30 @@ class HeatingController:
                 if state.cycle is not None:
                     state.cycle.counts = False
         self._first_tick = True
+
+    async def async_suspend(self, room: str | None) -> None:
+        """Automatik aus: Thermostate sofort wieder ihrem Homematic-Profil ueberlassen.
+
+        Ein Sollwert dieser Steuerung gilt im Automodus nur voruebergehend.
+        Das erneute Setzen des Automodus beendet ihn sofort.
+        """
+        for name, state in self.rooms.items():
+            if room is not None and name != room:
+                continue
+            if state.cycle is not None and not state.cycle.observed:
+                self._close_cycle(dt_util.utcnow(), name, state, "Automatik aus")
+            climates, _ = self._climates(name)
+            if not climates:
+                continue
+            try:
+                await self.hass.services.async_call(
+                    "climate", "set_hvac_mode", {"entity_id": climates, "hvac_mode": "auto"}, blocking=True
+                )
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("%s: Rueckgabe an das Homematic-Profil fehlgeschlagen: %s", name, err)
+            state.last_command = None
+            state.before_command = None
+            state.manual_until = None
 
     @callback
     def request_update(self) -> None:
@@ -468,7 +495,10 @@ class HeatingController:
             info["mode"] = mode
             if desired is not None and info["climates"]:
                 await self._apply(now, room, state, info, desired, setback, duty)
-            self._track_cycle(now, room, state, info, plans.get(room), desired, outside)
+            if mode == "aus" and info["climates"]:
+                self._observe(now, room, state, info, setback, outside)
+            else:
+                self._track_cycle(now, room, state, info, plans.get(room), desired, outside)
             state.status = self._room_status(room, state, info, plans.get(room), desired)
 
         self._first_tick = False
@@ -714,12 +744,76 @@ class HeatingController:
                     f"{late} min nach der Frist erreicht. Die Vorheizzeit wird angepasst.",
                 )
 
+    def _observe(
+        self,
+        now: datetime,
+        room: str,
+        state: RoomState,
+        info: dict[str, Any],
+        setback: float,
+        outside: float | None,
+    ) -> None:
+        """Automatik aus: Aufheizvorgaenge des Homematic-Profils beobachten und daraus lernen."""
+        temp = info["temp"]
+        target = info["target_now"]
+        cycle = state.cycle
+        if temp is None or target is None:
+            return
+        # Ende: Profil senkt wieder ab oder aendert das Ziel
+        if cycle is not None and (
+            not cycle.observed or abs(target - cycle.target) >= SETPOINT_TOLERANCE
+            or now - cycle.heat_start > timedelta(hours=12)
+        ):
+            self._close_cycle(now, room, state, "beobachtet" if cycle.observed else "Automatik aus")
+            cycle = None
+        # Beginn: Profil verlangt deutlich mehr als gemessen
+        if cycle is None and target > setback + 0.5 and target - temp >= 1.5:
+            model = self.model(room)
+            func = self._outside_function(now, outside if outside is not None else 0.0)
+            predicted = model.predict_minutes(temp, target, func)
+            state.cycle = cycle = Cycle(
+                event="Homematic-Profil",
+                calendar="",
+                event_start=now,
+                event_end=now + timedelta(hours=12),
+                deadline=now,
+                planned_start=now,
+                heat_start=now,
+                temp_start=temp,
+                outside_start=outside,
+                target=target,
+                predicted_minutes=predicted,
+                lead_minutes=predicted,
+                counts=not self._first_tick,
+                observed=True,
+            )
+        if cycle is None:
+            return
+        if cycle.reached_at is None and outside is not None and temp < cycle.target - 1.0:
+            cycle.window.append((now, temp, outside))
+            first = cycle.window[0]
+            if now - first[0] >= SAMPLE_WINDOW:
+                hours = (now - first[0]).total_seconds() / 3600
+                rate = (temp - first[1]) / hours
+                mean_temp = sum(p[1] for p in cycle.window) / len(cycle.window)
+                mean_out = sum(p[2] for p in cycle.window) / len(cycle.window)
+                if cycle.counts:
+                    self.model(room).add_sample(mean_temp - mean_out, rate)
+                cycle.window = [cycle.window[-1]]
+        if cycle.reached_at is None and temp >= cycle.target - REACHED_TOLERANCE:
+            cycle.reached_at = now
+            cycle.window.clear()
+            if cycle.counts:
+                minutes = (now - cycle.heat_start).total_seconds() / 60
+                self.model(room).add_ratio(minutes, cycle.predicted_minutes)
+            self._save()
+
     def _close_cycle(self, now: datetime, room: str, state: RoomState, reason: str) -> None:
         cycle = state.cycle
         state.cycle = None
         if cycle is None:
             return
-        if cycle.reached_at is None and cycle.counts and reason == "Terminende":
+        if cycle.reached_at is None and cycle.counts and reason == "Terminende" and not cycle.observed:
             # Nicht erreicht: die tatsaechliche Dauer ist mindestens so lang.
             elapsed = (now - cycle.heat_start).total_seconds() / 60 - cycle.paused_minutes
             if elapsed > cycle.predicted_minutes:

@@ -63,6 +63,9 @@ class AutomaticSwitch(SwitchEntity, RestoreEntity):
                 # Beim Wiedereinschalten stammen die aktuellen Sollwerte vom
                 # Homematic-Profil, nicht von einer Handverstellung.
                 controller.resume(self._room)
+            else:
+                # Thermostate sofort an ihr Homematic-Profil zurueckgeben.
+                await controller.async_suspend(self._room)
             controller.request_update()
 
     def _publish(self) -> None:
