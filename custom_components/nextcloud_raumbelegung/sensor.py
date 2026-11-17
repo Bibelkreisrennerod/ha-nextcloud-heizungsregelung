@@ -205,7 +205,8 @@ class BoilerStateSensor(StatusEntity, SensorEntity):
         if controller.boiler is None:
             return "keine Verbindung" if controller._boiler_error else None
         if controller.boiler.stale:
-            return "keine aktuellen Daten"
+            offline = str(controller.boiler.values.get("notconnected", {}).get("value")) == "1"
+            return "Kessel offline" if offline else "keine aktuellen Daten"
         return controller.boiler.state or "verbunden"
 
     @property
@@ -215,6 +216,7 @@ class BoilerStateSensor(StatusEntity, SensorEntity):
         return {
             "fehler": controller._boiler_error if controller else None,
             "vorlauf_gelesen": boiler.flow if boiler else None,
+            "letzte_uhrzeit": (boiler.values.get("clock") or {}).get("value") if boiler else None,
             "rohwerte": {
                 key: f"{item.get('value')} {item.get('unit') or ''}".strip()
                 for key, item in (boiler.values.items() if boiler else [])

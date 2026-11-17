@@ -28,7 +28,7 @@ STALE_AFTER = timedelta(minutes=30)
 # Moegliche Kennungen/Namen (klein geschrieben, Teilstring), in Reihenfolge.
 FLOW_KEYS = ("flow", "vorlauf", "fremløb", "fremlob", "boilertemp", "boiler temp")
 DHW_KEYS = ("dhw", "warmwasser", "varmt vand", "hot water")
-POWER_KEYS = ("power_pct", "powerpct", "power %", "power")
+POWER_KEYS = ("power_pct", "powerpct", "power %", "miscdata.output", "output")
 RETURN_KEYS = ("return", "rücklauf", "ruecklauf", "retur")
 EXCLUDE = ("target", "wanted", "soll", "ønsket", "liter", "l/h", "kw", "setpoint", "diff")
 
@@ -111,7 +111,7 @@ def _pick(values: dict[str, dict[str, Any]], keys: tuple[str, ...], unit_hint: s
             if wanted not in label or any(word in label for word in EXCLUDE):
                 continue
             unit = str(item.get("unit") or "").lower()
-            if unit_hint and unit and unit_hint not in unit:
+            if unit_hint and unit and not any(hint in unit for hint in unit_hint.split("|")):
                 continue
             number = _number(item.get("value"))
             if number is not None:
@@ -125,11 +125,11 @@ def parse(payload: Any, now: datetime, tz) -> StokerData:
     dates: list[datetime] = []
     _collect(payload, values, dates)
     data = StokerData(values=values, fetched=now)
-    data.flow = _pick(values, FLOW_KEYS, "c")
-    data.dhw = _pick(values, DHW_KEYS, "c")
-    data.return_temp = _pick(values, RETURN_KEYS, "c")
-    data.power = _pick(values, POWER_KEYS, "%")
-    for ident in ("state", "status", "boilerstate"):
+    data.flow = _pick(values, FLOW_KEYS, "°c|degree|lng_unit_c")
+    data.dhw = _pick(values, DHW_KEYS, "°c|degree|lng_unit_c")
+    data.return_temp = _pick(values, RETURN_KEYS, "°c|degree|lng_unit_c")
+    data.power = _pick(values, POWER_KEYS, "%|percent")
+    for ident in ("boilerstate", "state", "status"):
         for key, item in values.items():
             if key.lower().endswith(ident) and isinstance(item.get("value"), str):
                 data.state = item["value"]
@@ -140,12 +140,30 @@ def parse(payload: Any, now: datetime, tz) -> StokerData:
         latest = max(dates).replace(tzinfo=tz)
         if latest <= now + timedelta(hours=1):
             data.updated = latest.astimezone(timezone.utc)
+    # StokerCloud meldet die Verbindung des Kessels als "notconnected" (1 = offline)
+    # und die Uhrzeit der letzten Meldung als "clock" (ohne Datum).
+    connected = None
     for key, item in values.items():
-        if any(word in key.lower() for word in ("connected", "online")):
-            if str(item.get("value")).lower() in ("0", "false", "no"):
-                data.stale = True
-                return data
-    data.stale = data.updated is None or now - data.updated > STALE_AFTER
+        name = key.lower()
+        if name.endswith("notconnected"):
+            connected = str(item.get("value")).strip().lower() in ("0", "false", "no", "none")
+        elif name.endswith("connected") or name.endswith("online"):
+            connected = str(item.get("value")).strip().lower() in ("1", "true", "yes")
+    clock = next((item.get("value") for key, item in values.items() if key.lower() == "clock"), None)
+    if data.updated is None and connected and isinstance(clock, str):
+        match = re.fullmatch(r"\s*(\d{1,2}):(\d{2})\s*", clock)
+        if match:
+            local_now = now.astimezone(tz)
+            moment = local_now.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0, microsecond=0)
+            if moment > local_now + timedelta(minutes=5):
+                moment -= timedelta(days=1)
+            data.updated = moment.astimezone(timezone.utc)
+    if connected is False:
+        data.stale = True
+    elif data.updated is not None:
+        data.stale = now - data.updated > STALE_AFTER
+    else:
+        data.stale = connected is not True
     return data
 
 
