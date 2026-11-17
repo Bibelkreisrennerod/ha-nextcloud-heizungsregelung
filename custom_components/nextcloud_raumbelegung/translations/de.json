@@ -35,7 +35,11 @@
   "entity": {
     "binary_sensor": {
       "heating_demand": {
-        "name": "Heizbedarf"
+        "name": "Heizbedarf",
+        "state": {
+          "on": "Heizen",
+          "off": "Abgesenkt"
+        }
       },
       "occupied": {
         "name": "Belegt"

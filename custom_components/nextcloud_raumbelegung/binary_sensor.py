@@ -28,9 +28,13 @@ def _iso(value):
 
 
 class HeatingDemand(StatusEntity, BinarySensorEntity):
-    """An, wenn die Steuerung den Raum gerade auf Komforttemperatur haelt oder aufheizt."""
+    """An, wenn die Steuerung den Raum gerade auf Komforttemperatur haelt oder aufheizt.
 
-    _attr_device_class = BinarySensorDeviceClass.HEAT
+    Bewusst ohne Geraeteklasse: "heat" wuerde als "Heiss/Normal" angezeigt.
+    Die Zustandsnamen kommen aus den Uebersetzungen (Heizen/Abgesenkt).
+    """
+
+    _attr_icon = "mdi:radiator"
 
     def __init__(self, entry: ConfigEntry, room: str) -> None:
         super().__init__(entry, room, "heating_demand")
