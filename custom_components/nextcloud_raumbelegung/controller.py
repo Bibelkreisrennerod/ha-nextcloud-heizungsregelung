@@ -56,7 +56,9 @@ from .const import (
     GLOBAL_DEFAULTS,
     HISTORY_LENGTH,
     MANUAL_HOLD_OUTSIDE_EVENT,
+    MAX_COMMANDS_PER_HOUR,
     MIN_COMMAND_GAP,
+    COMMAND_RETRY_WINDOW,
     PAUSE_MINUTES,
     REACHED_TOLERANCE,
     ROOM_DEFAULTS,
@@ -146,6 +148,7 @@ class RoomState:
 
     last_command: float | None = None
     last_command_at: datetime | None = None
+    before_command: float | None = None  # Sollwert vor unserem letzten Befehl
     manual_until: datetime | None = None
     paused_until: datetime | None = None
     cycle: Cycle | None = None
@@ -178,6 +181,7 @@ class HeatingController:
         self._boiler_error: str | None = None
         self._unsub: Callable[[], None] | None = None
         self._lock = asyncio.Lock()
+        self._sent: list[datetime] = []  # eigene Befehle der letzten Stunde
 
     # ------------------------------------------------------------ Lebenszyklus
 
@@ -463,6 +467,7 @@ class HeatingController:
             "kessel_aktuell": self.boiler is not None and not self.boiler.stale,
             "vorlauf_niedrig": flow_low,
             "duty_cycle": duty,
+            "befehle_letzte_stunde": len(self._sent),
             "budget": budget,
             "plan": [
                 {
@@ -533,7 +538,15 @@ class HeatingController:
             return
         ours = state.last_command is not None and abs(current - state.last_command) < SETPOINT_TOLERANCE
         profile_reset = abs(current - setback) < SETPOINT_TOLERANCE
-        if not ours and not profile_reset and not self._first_tick:
+        # Unser letzter Befehl ist (noch) nicht angekommen, z. B. weil der
+        # Access Point kurz keine Cloud-Verbindung hatte: erneut senden.
+        not_arrived = (
+            state.before_command is not None
+            and state.last_command_at is not None
+            and now - state.last_command_at < COMMAND_RETRY_WINDOW
+            and abs(current - state.before_command) < SETPOINT_TOLERANCE
+        )
+        if not ours and not profile_reset and not not_arrived and not self._first_tick:
             # Jemand hat am Thermostat oder in der App verstellt.
             event = info["current"] or (info["upcoming"] if info.get("mode") in ("aufheizen", "halten") else None)
             state.manual_until = event.end if event is not None else now + MANUAL_HOLD_OUTSIDE_EVENT
@@ -545,12 +558,23 @@ class HeatingController:
             return
         if duty is not None and duty >= DUTY_CYCLE_LIMIT and desired < current:
             return  # Funkkontingent knapp: Absenken darf warten
-        await self.hass.services.async_call(
-            "climate",
-            "set_temperature",
-            {"entity_id": info["climates"], "temperature": desired},
-            blocking=False,
-        )
+        # Eigene Obergrenze, falls der Access Point keinen Duty Cycle meldet.
+        self._sent = [t for t in self._sent if now - t < timedelta(hours=1)]
+        if len(self._sent) >= MAX_COMMANDS_PER_HOUR and desired < current:
+            return
+        try:
+            await self.hass.services.async_call(
+                "climate",
+                "set_temperature",
+                {"entity_id": info["climates"], "temperature": desired},
+                blocking=True,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("%s: Sollwert %.1f nicht gesendet: %s", room, desired, err)
+            state.last_command_at = now  # in MIN_COMMAND_GAP erneut versuchen
+            return
+        self._sent.append(now)
+        state.before_command = current
         state.last_command = desired
         state.last_command_at = now
         _LOGGER.debug("%s: Sollwert %.1f gesendet (%s)", room, desired, info.get("mode"))

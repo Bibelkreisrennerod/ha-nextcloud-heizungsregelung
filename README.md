@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.2.1. Planer und Lernmodell sind mit Simulationen getestet,
+> Stand: Version 0.2.3. Planer und Lernmodell sind mit Simulationen getestet,
 > der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -36,7 +36,10 @@ Nextcloud direkt ab.
   Ein ausdrücklich gewählter Vorlauf-Sensor hat Vorrang.
 - **Funkkontingent:** Sie sendet nur echte Änderungen, höchstens alle
   3 Minuten je Raum. Ist der Duty Cycle des Homematic Access Points über
-  70 %, sendet sie nur noch Aufheiz-Befehle.
+  70 %, sendet sie nur noch Aufheiz-Befehle. Meldet der Access Point keinen
+  Duty Cycle, gilt eine eigene Obergrenze von 30 Befehlen je Stunde.
+  Kommt ein Befehl nicht an (z. B. kurze Cloud-Unterbrechung), wird er
+  nach 3 Minuten wiederholt statt als Handverstellung gewertet.
 - **Handverstellung:** Wer während eines Termins am Thermostat dreht, behält
   seinen Wert bis Terminende (außerhalb von Terminen 2 Stunden). Solche
   Vorgänge zählen nicht zum Lernen.

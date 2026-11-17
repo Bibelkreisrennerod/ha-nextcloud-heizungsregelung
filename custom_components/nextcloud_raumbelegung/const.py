@@ -39,6 +39,8 @@ EARLY_MINUTES = 15  # Raum soll so viele Minuten vor Terminbeginn warm sein
 REACHED_TOLERANCE = 0.5  # "warm" = Komforttemperatur minus diese Kelvin
 SETPOINT_TOLERANCE = 0.25
 MIN_COMMAND_GAP = timedelta(minutes=3)  # je Raum, schont das Funkkontingent
+COMMAND_RETRY_WINDOW = timedelta(minutes=15)  # so lange gilt ein nicht angekommener Befehl als unserer
+MAX_COMMANDS_PER_HOUR = 30  # Obergrenze, wenn der Access Point keinen Duty Cycle meldet
 DUTY_CYCLE_LIMIT = 70.0  # ab hier nur noch Aufheiz-Befehle
 DUTY_CYCLE_ALERT = 80.0
 FLOW_LOW_MINUTES = 10  # so lange muss der Vorlauf zu niedrig sein
