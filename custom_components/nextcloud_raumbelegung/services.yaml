@@ -1,0 +1,33 @@
+kalibrierlauf:
+  fields:
+    raeume:
+      required: true
+      example: '["Saal"]'
+      selector:
+        text:
+          multiple: true
+    zieltemperatur:
+      example: 21
+      selector:
+        number:
+          min: 15
+          max: 25
+          step: 0.5
+          unit_of_measurement: "°C"
+    andere_raeume:
+      example: 10
+      selector:
+        number:
+          min: 5
+          max: 20
+          step: 0.5
+          unit_of_measurement: "°C"
+    hoechstens_stunden:
+      example: 6
+      selector:
+        number:
+          min: 1
+          max: 12
+          step: 0.5
+          unit_of_measurement: h
+kalibrierlauf_abbrechen:

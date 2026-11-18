@@ -27,13 +27,10 @@ class Spec:
 ROOM_SPECS = {
     "comfort": Spec(10, 26, 0.5, UnitOfTemperature.CELSIUS, NumberDeviceClass.TEMPERATURE, False),
     "preheat": Spec(0, 720, 5, UnitOfTime.MINUTES, NumberDeviceClass.DURATION),
-    "weight": Spec(0, 2, 0.05),
     "priority": Spec(1, 9, 1),
 }
 GLOBAL_SPECS = {
     "setback": Spec(5, 20, 0.5, UnitOfTemperature.CELSIUS, NumberDeviceClass.TEMPERATURE, False),
-    "budget": Spec(0.25, 5, 0.05),
-    "flow_threshold": Spec(20, 80, 1, UnitOfTemperature.CELSIUS, NumberDeviceClass.TEMPERATURE),
 }
 
 

@@ -52,20 +52,11 @@
       "comfort": {
         "name": "Komforttemperatur"
       },
-      "weight": {
-        "name": "Lastgewicht"
-      },
       "priority": {
         "name": "Vorrang"
       },
       "setback": {
         "name": "Absenktemperatur"
-      },
-      "budget": {
-        "name": "Lastbudget"
-      },
-      "flow_threshold": {
-        "name": "Vorlauf-Schwelle"
       }
     },
     "switch": {
@@ -106,6 +97,39 @@
       },
       "global_boiler_state": {
         "name": "Kessel Status"
+      },
+      "warm_at": {
+        "name": "Warm um (Prognose)"
+      },
+      "setpoint": {
+        "name": "Sollwert Steuerung"
+      },
+      "valve": {
+        "name": "Ventilstellung"
+      },
+      "cooling_rate": {
+        "name": "Auskühlrate"
+      },
+      "heating_rate": {
+        "name": "Max. Aufheizrate"
+      },
+      "power_demand": {
+        "name": "Leistungsbedarf"
+      },
+      "global_buffer_reserve": {
+        "name": "Pufferreserve"
+      },
+      "global_buffer_capacity": {
+        "name": "Pufferkapazität"
+      },
+      "global_boiler_rated": {
+        "name": "Kessel-Dauerleistung"
+      },
+      "global_boiler_startup": {
+        "name": "Kessel-Anlaufzeit"
+      },
+      "global_calibration": {
+        "name": "Kalibrierung"
       }
     }
   },
@@ -113,7 +137,7 @@
     "step": {
       "init": {
         "title": "Messwerte für die Steuerung",
-        "description": "Alle Angaben sind optional. Die Vorlauftemperatur kommt aus StokerCloud oder einem gewählten Sensor; ohne beides plant die Steuerung nur mit dem Lastbudget. Die Außentemperatur kommt sonst aus der Wetter-Entität, der Duty Cycle wird bei Homematic IP automatisch gefunden.",
+        "description": "Alle Angaben sind optional. Die Vorlauftemperatur kommt aus StokerCloud oder einem gewählten Sensor; ohne beides schätzt die Steuerung die Pufferreserve nur aus den Ventilstellungen. Die Außentemperatur und die Prognose kommen aus der Wetter-Entität, der Duty Cycle wird bei Homematic IP automatisch gefunden.",
         "data": {
           "weather_entity": "Wetter (Prognose)",
           "flow_sensor": "Vorlauftemperatur",
@@ -125,6 +149,34 @@
           "stokercloud_name": "Name aus der Adresse der öffentlichen Ansicht, z. B. „nawatec“ bei stokercloud.dk/dev/nawatec.html. Kein Passwort nötig. Ein gewählter Vorlauf-Sensor hat Vorrang."
         }
       }
+    }
+  },
+  "services": {
+    "kalibrierlauf": {
+      "name": "Kalibrierlauf",
+      "description": "Heizt die angegebenen Räume unter idealen Bedingungen auf, um Pufferreserve, Leistungsbedarf und Aufheizrate zu messen. Beginnt erst, wenn seit 90 Minuten kein Raum geheizt hat; nur an Tagen ohne Buchungen. Andere Räume werden währenddessen tiefer abgesenkt.",
+      "fields": {
+        "raeume": {
+          "name": "Räume",
+          "description": "Namen der Räume wie in Nextcloud, z. B. Saal."
+        },
+        "zieltemperatur": {
+          "name": "Zieltemperatur",
+          "description": "Standard: Komforttemperatur der Räume."
+        },
+        "andere_raeume": {
+          "name": "Andere Räume",
+          "description": "Sollwert der übrigen Räume während des Laufs. Standard: Absenktemperatur minus 4 K."
+        },
+        "hoechstens_stunden": {
+          "name": "Höchstens Stunden",
+          "description": "Abbruch nach dieser Zeit. Standard: 6."
+        }
+      }
+    },
+    "kalibrierlauf_abbrechen": {
+      "name": "Kalibrierlauf abbrechen",
+      "description": "Bricht einen angeforderten oder laufenden Kalibrierlauf ab."
     }
   }
 }

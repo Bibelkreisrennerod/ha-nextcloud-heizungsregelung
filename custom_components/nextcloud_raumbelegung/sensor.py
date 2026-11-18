@@ -1,4 +1,4 @@
-"""Sensoren je Raum (Vorheizzeit, Heizstart, Temperatur, Protokoll) und fuer die Anlage."""
+"""Sensoren je Raum (Plan, Prognose, gelernte Groessen, Protokoll) und fuer die Anlage."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTemperature, UnitOfTime
+from homeassistant.const import PERCENTAGE, UnitOfEnergy, UnitOfPower, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
@@ -27,10 +27,23 @@ async def async_setup_entry(
         lambda room: [
             LeadSensor(entry, room),
             PlannedStartSensor(entry, room),
+            WarmAtSensor(entry, room),
+            SetpointSensor(entry, room),
             RoomTemperatureSensor(entry, room),
+            ValveSensor(entry, room),
+            CoolingRateSensor(entry, room),
+            HeatingRateSensor(entry, room),
+            PowerDemandSensor(entry, room),
             ProtocolSensor(entry, room),
         ],
-        [ControlStatusSensor(entry, None, "status")]
+        [
+            ControlStatusSensor(entry, None, "status"),
+            BufferReserveSensor(entry, None, "buffer_reserve"),
+            BufferCapacitySensor(entry, None, "buffer_capacity"),
+            BoilerRatedSensor(entry, None, "boiler_rated"),
+            BoilerStartupSensor(entry, None, "boiler_startup"),
+            CalibrationSensor(entry, None, "calibration"),
+        ]
         + (
             [
                 BoilerSensor(entry, "boiler_flow", "flow"),
@@ -45,12 +58,18 @@ async def async_setup_entry(
     )
 
 
+def _iso(value: datetime | None) -> str | None:
+    return dt_util.as_local(value).isoformat(timespec="minutes") if value else None
+
+
+# ---------------------------------------------------------------- je Raum
+
+
 class LeadSensor(StatusEntity, SensorEntity):
-    """Benoetigte Vorheizzeit fuer den naechsten Termin (gelernt, mit Zuschlag)."""
+    """Vorheizzeit fuer den naechsten Termin laut Plan (Frist minus Heizbeginn)."""
 
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
-    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
 
     def __init__(self, entry: ConfigEntry, room: str) -> None:
@@ -65,15 +84,13 @@ class LeadSensor(StatusEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         status = self._status
         return {
-            "gelernte_vorgaenge": status.get("learned_cycles"),
-            "sicherheitsfaktor": status.get("margin"),
-            "aufheizrate_k_pro_h": status.get("heat_rate"),
-            "waermeverlust": status.get("loss"),
+            "sicherheitsfaktor": round(status["safety"], 2) if status.get("safety") else None,
+            "gewertete_vorgaenge": status.get("learned_cycles"),
         }
 
 
 class PlannedStartSensor(StatusEntity, SensorEntity):
-    """Geplanter Beginn des naechsten Aufheizens."""
+    """Geplanter Beginn des naechsten Aufheizens (Vorstufe oder Komfort)."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
@@ -86,7 +103,55 @@ class PlannedStartSensor(StatusEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return {"knapp": self._status.get("planned_late", False)}
+        status = self._status
+        return {
+            "vorstufe_ab": _iso(status.get("pre_start")),
+            "vorstufe_sollwert": status.get("pre_level"),
+            "komfort_ab": _iso(status.get("main_start")),
+            "frist": _iso(status.get("deadline")),
+            "knapp": status.get("planned_late", False),
+        }
+
+
+class WarmAtSensor(StatusEntity, SensorEntity):
+    """Prognose: wann der Raum warm ist (vorsichtig gerechnet)."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "warm_at")
+
+    @property
+    def native_value(self) -> datetime | None:
+        return self._status.get("reach")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        status = self._status
+        return {
+            "ohne_sicherheitszuschlag": _iso(status.get("reach_nominal")),
+            "frist": _iso(status.get("deadline")),
+            "knapp": status.get("planned_late", False),
+        }
+
+
+class SetpointSensor(StatusEntity, SensorEntity):
+    """Sollwert, den die Steuerung gerade vorgibt (auch Zwischenwerte)."""
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "setpoint")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._status.get("desired")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"betriebsart": self._status.get("mode")}
 
 
 class RoomTemperatureSensor(StatusEntity, SensorEntity):
@@ -102,6 +167,104 @@ class RoomTemperatureSensor(StatusEntity, SensorEntity):
     @property
     def native_value(self) -> float | None:
         return self._status.get("temp")
+
+
+class ValveSensor(StatusEntity, SensorEntity):
+    """Mittlere Ventilstellung der Heizkoerper im Raum."""
+
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_icon = "mdi:valve"
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "valve")
+
+    @property
+    def native_value(self) -> float | None:
+        return self._status.get("valve")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        count = self._status.get("valve_count")
+        return {"ventile": count, "geschaetzt": not count}
+
+
+class CoolingRateSensor(StatusEntity, SensorEntity):
+    """Waermeverlust als Temperaturabfall: K/h bei 20 K Unterschied nach aussen."""
+
+    _attr_native_unit_of_measurement = "K/h"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:thermometer-chevron-down"
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "cooling_rate")
+
+    @property
+    def native_value(self) -> float | None:
+        a = self._status.get("a")
+        return round(a * 20.0, 2) if a is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        a = self._status.get("a")
+        return {
+            "auskuehlkonstante_pro_h": round(a, 4) if a else None,
+            "zeitkonstante_h": round(1 / a, 1) if a else None,
+            "messfenster": self._status.get("cool_windows"),
+        }
+
+
+class HeatingRateSensor(StatusEntity, SensorEntity):
+    """Groesster Waermegewinn: K/h bei offenen Ventilen und vollem Puffer."""
+
+    _attr_native_unit_of_measurement = "K/h"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:thermometer-chevron-up"
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "heating_rate")
+
+    @property
+    def native_value(self) -> float | None:
+        b = self._status.get("b")
+        return round(b, 2) if b is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        status = self._status
+        a, b = status.get("a"), status.get("b")
+        return {
+            "netto_bei_20_k": round(b - 20 * a, 2) if a is not None and b is not None else None,
+            "aufheizvorgaenge": status.get("heat_windows"),
+        }
+
+
+class PowerDemandSensor(StatusEntity, SensorEntity):
+    """Leistungsbedarf bei offenen Ventilen, in Prozent der Kessel-Dauerleistung."""
+
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:radiator"
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "power_demand")
+
+    @property
+    def native_value(self) -> float | None:
+        w = self._status.get("w")
+        return round(w * 100) if w is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        status = self._status
+        w, kw = status.get("w"), status.get("boiler_kw")
+        return {
+            "kw": round(w * kw, 1) if w is not None and kw else None,
+            "gemessen": status.get("w_measured", False),
+        }
 
 
 class ProtocolSensor(StatusEntity, SensorEntity):
@@ -127,33 +290,119 @@ class ProtocolSensor(StatusEntity, SensorEntity):
         return {"vorgaenge": (self._status.get("history") or [])[:PROTOCOL_ROWS]}
 
 
+# ---------------------------------------------------------------- Anlage
+
+
 class ControlStatusSensor(StatusEntity, SensorEntity):
     """Zusammenfassung der Anlage: Plan, Vorlauf, Aussentemperatur."""
 
     _attr_icon = "mdi:home-thermometer"
+    _unrecorded_attributes = frozenset({"plan", "letzte_auswertung"})
 
     @property
     def native_value(self) -> str | None:
         status = self._status
         if not status:
             return None
+        if status.get("kalibrierung_status") not in (None, "aus"):
+            return f"Kalibrierung {status['kalibrierung_status']}"
         if not status.get("automatik"):
             return "aus"
-        if status.get("vorlauf_niedrig"):
-            return "Vorlauf niedrig"
-        now = dt_util.now().isoformat(timespec="minutes")
-        active = [p for p in status.get("plan", []) if p["start"] <= now]
-        return f"{len(active)} Raum heizt auf" if len(active) == 1 else f"{len(active)} Räume heizen auf"
+        count = status.get("heizen", 0)
+        return f"{count} Raum heizt" if count == 1 else f"{count} Räume heizen"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         status = self._status
         return {
             "plan": status.get("plan"),
+            "geplant_um": status.get("plan_um"),
+            "absenkfenster": status.get("absenkfenster"),
             "aussentemperatur": status.get("aussen"),
             "vorlauf": status.get("vorlauf"),
             "duty_cycle": status.get("duty_cycle"),
-            "lastbudget": status.get("budget"),
+        }
+
+
+class BufferReserveSensor(StatusEntity, SensorEntity):
+    """Geschaetzte Pufferreserve in Prozent (aus Ventilstellungen, Vorlauf korrigiert)."""
+
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:storage-tank"
+
+    @property
+    def native_value(self) -> float | None:
+        value = self._status.get("puffer_reserve")
+        return round(value * 100) if value is not None else None
+
+
+class BufferCapacitySensor(StatusEntity, SensorEntity):
+    """Gelernte nutzbare Pufferkapazitaet in kWh."""
+
+    _attr_device_class = SensorDeviceClass.ENERGY_STORAGE
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_suggested_display_precision = 0
+
+    @property
+    def native_value(self) -> float | None:
+        status = self._status
+        hours, kw = status.get("puffer_kapazitaet_h"), status.get("kessel_kw")
+        return round(hours * kw, 1) if hours is not None and kw else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        status = self._status
+        hours = status.get("puffer_kapazitaet_h")
+        return {
+            "kessel_stunden": round(hours, 2) if hours is not None else None,
+            "gemessen": status.get("puffer_gemessen", False),
+        }
+
+
+class BoilerRatedSensor(StatusEntity, SensorEntity):
+    """Dauerleistung des Kessels (StokerCloud, sonst Nennwert)."""
+
+    _attr_device_class = SensorDeviceClass.POWER
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_suggested_display_precision = 0
+
+    @property
+    def native_value(self) -> float | None:
+        return self._status.get("kessel_kw")
+
+
+class BoilerStartupSensor(StatusEntity, SensorEntity):
+    """Anlaufzeit des Kessels bis zur vollen Leistung."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_suggested_display_precision = 0
+
+    @property
+    def native_value(self) -> float | None:
+        hours = self._status.get("anlaufzeit_h")
+        return round(hours * 60) if hours is not None else None
+
+
+class CalibrationSensor(StatusEntity, SensorEntity):
+    """Kalibrierlauf und letzte Auswertung einer Heizphase."""
+
+    _attr_icon = "mdi:tune-vertical"
+    _unrecorded_attributes = frozenset({"letzte_auswertung", "lauf"})
+
+    @property
+    def native_value(self) -> str | None:
+        return self._status.get("kalibrierung_status")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        status = self._status
+        return {
+            "lauf": status.get("kalibrierung"),
+            "ausgewertete_heizphasen": status.get("auswertungen"),
+            "letzte_auswertung": status.get("letzte_auswertung"),
         }
 
 

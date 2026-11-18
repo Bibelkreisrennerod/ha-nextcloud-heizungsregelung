@@ -24,16 +24,14 @@ DAYS_AHEAD = 7
 # Einstellungen: Schluessel -> Standardwert. Raumwerte gelten je Raum,
 # globale Werte fuer die ganze Anlage.
 ROOM_DEFAULTS: dict[str, float] = {
-    "preheat": 120.0,  # Startwert Vorheizzeit (min) fuer 14 -> 21 Grad bei 0 Grad aussen
+    "preheat": 120.0,  # Startwert Vorheizzeit (min) fuer 14 -> 21 Grad bei 0 Grad aussen, allein
     "comfort": 21.0,  # Komforttemperatur (Grad)
-    "weight": 0.5,  # Lastgewicht
     "priority": 5.0,  # Vorrang, 1 = hoechster
 }
 GLOBAL_DEFAULTS: dict[str, float] = {
     "setback": 14.0,  # Absenktemperatur (Grad)
-    "budget": 1.0,  # Lastbudget des Kessels
-    "flow_threshold": 45.0,  # Vorlauf-Schwelle (Grad)
 }
+REMOVED_SETTINGS = ("weight", "budget", "flow_threshold")  # bis 0.2.x, Entitaeten werden entfernt
 
 EARLY_MINUTES = 15  # Raum soll so viele Minuten vor Terminbeginn warm sein
 REACHED_TOLERANCE = 0.5  # "warm" = Komforttemperatur minus diese Kelvin
@@ -43,9 +41,16 @@ COMMAND_RETRY_WINDOW = timedelta(minutes=15)  # so lange gilt ein nicht angekomm
 MAX_COMMANDS_PER_HOUR = 30  # Obergrenze, wenn der Access Point keinen Duty Cycle meldet
 DUTY_CYCLE_LIMIT = 70.0  # ab hier nur noch Aufheiz-Befehle
 DUTY_CYCLE_ALERT = 80.0
-FLOW_LOW_MINUTES = 10  # so lange muss der Vorlauf zu niedrig sein
-PAUSE_MINUTES = 20  # Dauer einer Lastpause
 MANUAL_HOLD_OUTSIDE_EVENT = timedelta(hours=2)
-SAMPLE_WINDOW = timedelta(minutes=15)  # Messfenster fuer die Aufheizrate
 HISTORY_LENGTH = 50
+SAMPLE_INTERVAL = timedelta(minutes=5)  # Messpunkt fuers Lernen
+PLAN_CHECK_INTERVAL = timedelta(minutes=10)  # Plan pruefen (ein Simulationslauf)
+PLAN_MAX_AGE = timedelta(hours=3)  # spaetestens dann neu planen (neue Prognose, neue Parameter)
+BOILER_NOMINAL_KW = 30.0  # Kessel-Nennleistung, falls StokerCloud keine meldet
+
+# Kalibrierlauf
+CALIBRATION_REST = timedelta(minutes=90)  # vorher so lange kein Raum geheizt (Puffer voll)
+CALIBRATION_WAIT = timedelta(hours=4)  # so lange auf Ruhe warten, dann abbrechen
+CALIBRATION_HOURS = 6.0  # hoechstens so lange heizen
+CALIBRATION_OTHERS_DROP = 4.0  # nicht beteiligte Raeume: Absenkung minus so viel
 SOURCE_ALERT_AFTER = timedelta(minutes=30)

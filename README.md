@@ -10,24 +10,45 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.2.7. Planer und Lernmodell sind mit Simulationen getestet,
-> der Betrieb mit echten Thermostaten steht noch aus.
+> Stand: Version 0.3.0. Modell, Lernen und Planung sind mit Simulationen
+> getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
 
-- **Planen:** Für jeden gebuchten Raum berechnet sie, wie lange er zum
-  Aufheizen braucht, und startet rechtzeitig, damit er 15 Minuten vor
-  Terminbeginn warm ist (Komforttemperatur minus 0,5 K).
-- **Lernen:** Jeder Aufheizvorgang wird gemessen. Daraus lernt sie je Raum
-  Aufheizrate und Wärmeverlust, abhängig von der Außentemperatur samt
-  Wetterprognose. Ein Sicherheitszuschlag passt sich so an, dass rund
-  95 % der Termine pünktlich warm sind. Am Anfang gilt der eingestellte
-  Startwert; er wird je gemessenem Vorgang um höchstens 10 % unterschritten.
-- **Kesselengpass:** Jeder Raum hat ein Lastgewicht, der Kessel ein
-  Lastbudget. Mehr Räume als das Budget erlaubt heizen nie gleichzeitig auf;
-  die Steuerung staffelt stattdessen früher. Fällt die Vorlauftemperatur
-  (optional) zehn Minuten unter die Schwelle, pausiert sie den Raum mit dem
-  größten Zeitpuffer für 20 Minuten.
+- **Physikalisches Modell:** Je Raum drei gelernte Größen: Auskühlrate
+  (Wärmeverlust, K/h je Kelvin Unterschied nach außen), maximale
+  Aufheizrate (K/h bei offenen Ventilen und vollem Puffer) und
+  Leistungsbedarf (Anteil der Kessel-Dauerleistung bei offenen Ventilen).
+  Für die Anlage: Kessel-Dauerleistung, Anlaufzeit und nutzbare
+  Pufferreserve. Zieht ein Raum mehr als der Kessel liefert (der Saal), deckt
+  der Puffer die Lücke, bis er leer ist; danach teilen sich alle offenen
+  Räume die Kesselleistung und heizen langsamer.
+- **Planen:** Alle Räume werden zusammen simuliert, mit der Wetterprognose,
+  in 10-Minuten-Schritten bis zur spätesten Frist (höchstens 24 Stunden).
+  Jeder Raum beginnt so spät wie möglich und ist 15 Minuten vor
+  Terminbeginn warm (Komforttemperatur minus 0,5 K). Heizen andere Räume
+  gleichzeitig, verlängert sich die Vorheizzeit entsprechend. Reicht die Zeit
+  nicht für alle, entscheidet der Vorrang. Wo es Energie spart, gibt es eine
+  Vorstufe: früh auf einen Zwischen-Sollwert (Komfort minus 3 K), spät auf
+  Komfort. Räume ohne Termin werden während knapper Phasen 2 K unter die
+  Absenkung gesetzt, damit ihre Ventile den aufheizenden Räumen keinen
+  Vorlauf wegnehmen.
+- **Sparsam rechnen:** Ein fertiger Plan bleibt, solange er aufgeht. Alle
+  10 Minuten prüft ein einziger Simulationslauf das; neu geplant wird nur bei
+  geänderten Terminen oder Einstellungen, neuen gelernten Werten, spätestens
+  nach 3 Stunden, oder wenn ein Raum zu spät käme.
+- **Lernen:** Alle 5 Minuten ein Messpunkt (Raumtemperatur, Ventilstellung,
+  Außentemperatur, Vorlauf). Auskühlphasen ergeben den Wärmeverlust,
+  Heizphasen Aufheizrate, Leistungsbedarf und Pufferreserve. Der Vorlauf
+  zeigt direkt, welchen Anteil ihres Bedarfs die Räume bekommen. Ein
+  Sicherheitszuschlag passt sich so an, dass rund 95 % der Termine pünktlich
+  warm sind (Start 25 %). Gelernt wird auch bei ausgeschalteter Automatik,
+  dann aus dem Homematic-Profil.
+- **Kalibrierlauf:** Der Dienst `nextcloud_raumbelegung.kalibrierlauf` heizt
+  an einem freien Tag einen oder mehrere Räume unter idealen Bedingungen auf
+  (Puffer voll, andere Räume tiefer abgesenkt). Zwei Läufe reichen für den
+  Anfang: der Saal allein, dann alle kleinen Räume zusammen. Er wartet, bis
+  90 Minuten lang kein Raum aufgeheizt hat, und gibt die Räume danach zurück.
 - **Kesseldaten (optional):** Mit dem StokerCloud-Anlagennamen (z. B.
   „nawatec“ aus `stokercloud.dk/dev/nawatec.html`) liest die Integration
   Vorlauf, Warmwasser, Leistung und Status des NBE-Kessels, nur lesend und
@@ -42,17 +63,15 @@ Nextcloud direkt ab.
   nach 3 Minuten wiederholt statt als Handverstellung gewertet.
 - **Handverstellung:** Wer während eines Termins am Thermostat dreht, behält
   seinen Wert bis Terminende (außerhalb von Terminen 2 Stunden). Solche
-  Vorgänge zählen nicht zum Lernen.
+  Vorgänge zählen nicht für den Sicherheitszuschlag.
 - **Automatik aus:** Schaltet man die Automatik (global oder je Raum) aus,
   gibt die Steuerung die Thermostate sofort an ihr Homematic-Profil zurück
-  (Automodus neu gesetzt). Solange sie aus ist, beobachtet sie die
-  Aufheizvorgänge des Profils und lernt daraus; im Heizprotokoll stehen sie
+  (Automodus neu gesetzt). Im Heizprotokoll stehen dessen Aufheizvorgänge
   als „Homematic-Profil“.
 - **Betriebsart der Thermostate:** Solange die Automatik an ist, stellt die
   Steuerung die gesteuerten Heizgruppen auf „Manuell“; das Homematic-Profil
   greift dann nicht ein. Fällt Home Assistant aus, bleibt der letzte
-  Sollwert stehen. Beim Ausschalten der Automatik gehen die Gruppen zurück
-  in den Automodus, und das bisherige Homematic-Profil gilt sofort.
+  Sollwert stehen.
 
 ## Voraussetzungen in Homematic IP
 
@@ -93,20 +112,30 @@ Je Raum ein Gerät:
 | --- | --- |
 | Heizbedarf | An, solange die Steuerung den Raum aufheizt, warm hält oder ein Termin läuft |
 | Belegt | An, solange laut Kalender ein Termin läuft |
-| Vorheizzeit | Gelernte Vorheizzeit für den nächsten Termin (mit Zuschlag) |
-| Geplanter Heizstart | Wann das Aufheizen beginnt |
+| Sollwert Steuerung | Was die Steuerung gerade vorgibt, auch Zwischenwerte; Attribut Betriebsart |
+| Geplanter Heizstart | Beginn von Vorstufe oder Komfort; Attribute mit beiden Zeiten und Frist |
+| Warm um (Prognose) | Wann der Raum laut Plan warm ist (mit Sicherheitszuschlag) |
+| Vorheizzeit | Frist minus geplanter Heizstart |
 | Raumtemperatur | Temperatur, mit der die Steuerung rechnet |
+| Ventilstellung | Mittel der Heizkörperventile im Raum |
+| Auskühlrate | Temperaturverlust in K/h bei 20 K Unterschied nach außen |
+| Max. Aufheizrate | K/h bei offenen Ventilen und vollem Puffer |
+| Leistungsbedarf | Anteil der Kessel-Dauerleistung bei offenen Ventilen (Attribut kW) |
 | Heizprotokoll | Letzte Heizvorgänge mit Start, erreicht um, Abweichung zur Frist |
 | Komforttemperatur | Zieltemperatur während Terminen (Standard 21 °C) |
-| Vorheizzeit Startwert | Startwert für 14 → 21 °C bei 0 °C außen (Standard 120 min) |
-| Lastgewicht | Anteil am Kesselbudget während des Aufheizens (Standard 0,5) |
-| Vorrang | 1 = höchster; entscheidet bei Engpässen |
+| Vorheizzeit Startwert | Wie lange der Raum allein von 14 auf 21 °C braucht, bei 0 °C außen; gilt, bis gemessen wurde (Standard 120 min) |
+| Vorrang | 1 = höchster; entscheidet, wenn die Zeit nicht für alle reicht |
 | Automatik | Aus: Thermostate dieses Raums werden nicht gesteuert |
 
-Dazu ein Gerät „Heizungssteuerung“ mit Status, Absenktemperatur (14 °C),
-Lastbudget (1,0), Vorlauf-Schwelle (45 °C) und dem globalen Schalter
-„Automatik“. In den Optionen der Integration lassen sich Wetter-Entität,
-Vorlauf-Sensor, Außentemperatur-Sensor und Duty-Cycle-Sensor wählen.
+Dazu ein Gerät „Heizungssteuerung“ mit Status (Attribut `plan`),
+Pufferreserve, Pufferkapazität, Kessel-Dauerleistung, Kessel-Anlaufzeit,
+Kalibrierung (letzte Auswertung als Attribut), Absenktemperatur (14 °C) und
+dem globalen Schalter „Automatik“. In den Optionen der Integration lassen
+sich Wetter-Entität, Vorlauf-Sensor, Außentemperatur-Sensor,
+Duty-Cycle-Sensor und StokerCloud-Anlagenname wählen.
+
+Lastgewicht, Lastbudget und Vorlauf-Schwelle aus Version 0.2 gibt es nicht
+mehr; die Entitäten werden beim Update entfernt.
 
 Räume werden aus den in Nextcloud angelegten Ressourcen und aus den Terminen
 selbst übernommen. Neue Räume erscheinen automatisch. Die Attribute der

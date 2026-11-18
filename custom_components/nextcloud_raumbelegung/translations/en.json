@@ -52,20 +52,11 @@
       "comfort": {
         "name": "Comfort temperature"
       },
-      "weight": {
-        "name": "Load weight"
-      },
       "priority": {
         "name": "Priority"
       },
       "setback": {
         "name": "Setback temperature"
-      },
-      "budget": {
-        "name": "Load budget"
-      },
-      "flow_threshold": {
-        "name": "Flow threshold"
       }
     },
     "switch": {
@@ -106,6 +97,39 @@
       },
       "global_boiler_state": {
         "name": "Boiler state"
+      },
+      "warm_at": {
+        "name": "Warm at (forecast)"
+      },
+      "setpoint": {
+        "name": "Control setpoint"
+      },
+      "valve": {
+        "name": "Valve position"
+      },
+      "cooling_rate": {
+        "name": "Cooling rate"
+      },
+      "heating_rate": {
+        "name": "Max. heating rate"
+      },
+      "power_demand": {
+        "name": "Power demand"
+      },
+      "global_buffer_reserve": {
+        "name": "Buffer reserve"
+      },
+      "global_buffer_capacity": {
+        "name": "Buffer capacity"
+      },
+      "global_boiler_rated": {
+        "name": "Boiler rated power"
+      },
+      "global_boiler_startup": {
+        "name": "Boiler start-up time"
+      },
+      "global_calibration": {
+        "name": "Calibration"
       }
     }
   },
@@ -113,7 +137,7 @@
     "step": {
       "init": {
         "title": "Measurements for the control",
-        "description": "All optional. Without a flow sensor the control plans with the load budget only.",
+        "description": "All fields are optional. The flow temperature comes from StokerCloud or a selected sensor; without either, the buffer reserve is estimated from valve positions only. Outside temperature and forecast come from the weather entity.",
         "data": {
           "weather_entity": "Weather (forecast)",
           "flow_sensor": "Flow temperature",
@@ -125,6 +149,34 @@
           "stokercloud_name": "Name from the public view address. No password needed."
         }
       }
+    }
+  },
+  "services": {
+    "kalibrierlauf": {
+      "name": "Calibration run",
+      "description": "Heats the given rooms under ideal conditions to measure buffer reserve, power demand and heating rate. Starts only after 90 minutes without heating; only on days without bookings. Other rooms are set lower meanwhile.",
+      "fields": {
+        "raeume": {
+          "name": "Rooms",
+          "description": "Room names as in Nextcloud, e.g. Saal."
+        },
+        "zieltemperatur": {
+          "name": "Target temperature",
+          "description": "Default: comfort temperature of the rooms."
+        },
+        "andere_raeume": {
+          "name": "Other rooms",
+          "description": "Setpoint of all other rooms during the run. Default: setback minus 4 K."
+        },
+        "hoechstens_stunden": {
+          "name": "Maximum hours",
+          "description": "Abort after this time. Default: 6."
+        }
+      }
+    },
+    "kalibrierlauf_abbrechen": {
+      "name": "Cancel calibration run",
+      "description": "Cancels a requested or running calibration run."
     }
   }
 }

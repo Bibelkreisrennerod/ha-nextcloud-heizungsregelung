@@ -53,6 +53,7 @@ class HeatingDemand(StatusEntity, BinarySensorEntity):
             "naechster_termin": status.get("next_event"),
             "termin_beginn": _iso(status.get("next_start")),
             "geplanter_heizstart": _iso(status.get("planned_start")),
+            "warm_um": _iso(status.get("reach")),
             "thermostate": status.get("climates"),
         }
 
