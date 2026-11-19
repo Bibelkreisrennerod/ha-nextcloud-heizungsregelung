@@ -17,7 +17,7 @@ def run_day(outside_shift=0.0, use_planner=True, label="", truth=False):
         "Ehemaliger Sonntagsschulraum":[]}
     prio={"Saal":1,"Nebenraum (groß)":2}
     plans={}; reach={}; since={}; cmds=[]; tsum=0; nplan=0; res=None; last_sig=None; nreplan=0
-    gauge=P.PlantState(lr.plant_params(P.PlantParams()).e_buf)
+    gauge=P.PlantState((TPLANT if truth else lr.plant_params(P.PlantParams())).e_buf)
     for m in range(21*60):
         now=w.t
         if m%10==0:
@@ -27,7 +27,7 @@ def run_day(outside_shift=0.0, use_planner=True, label="", truth=False):
                 if w.set[r]>=21.0-0.01: return "main"
                 if 14.0 < w.set[r] < 21.0: return "pre"
                 return None
-            inputs=[PL.RoomInput(name=r,params=(TRUE[r] if truth else lr.room_params(r,PRIOR[r])),temp=w.reading(r),comfort=21.0,setback=14.0,priority=prio.get(r,5),safety=(1.0 if truth else 1.1),events=[e for e in ev[r] if e[1]>now],committed=committed(r)) for r in ROOMS]
+            inputs=[PL.RoomInput(name=r,params=(TRUE[r] if truth else lr.room_params(r,PRIOR[r])),temp=w.reading(r),comfort=21.0,setback=14.0,priority=prio.get(r,5),safety=(1.0 if truth else 1.1),events=[e for e in ev[r] if e[1]>now],committed=committed(r),valve=w.valves[r]) for r in ROOMS]
             t0=time.time()
             sig=PL.plan_signature(inputs,now)
             if res is None or sig!=last_sig or not PL.plan_still_valid(inputs,res,plant,gauge,lambda t: w.outside(t),now):
@@ -45,8 +45,8 @@ def run_day(outside_shift=0.0, use_planner=True, label="", truth=False):
                 w.set[inp.name]=sp
         w.step(1)
         if w.t.minute%5==0:
-            D=sum(lr.room_params(r,PRIOR[r]).w*w.valves[r] for r in ROOMS)
-            P.plant_step(D,lr.plant_params(P.PlantParams()),gauge,5/60)
+            D=sum((TRUE[r] if truth else lr.room_params(r,PRIOR[r])).w*w.valves[r] for r in ROOMS)
+            P.plant_step(D,TPLANT if truth else lr.plant_params(P.PlantParams()),gauge,5/60)
         for r in ROOMS:
             if not ev[r]: continue
             if w.temps[r]>=20.5:

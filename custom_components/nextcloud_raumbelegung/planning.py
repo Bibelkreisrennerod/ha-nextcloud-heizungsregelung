@@ -49,7 +49,16 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Callable
 
-from .physics import REACH_TOLERANCE, PlantParams, PlantState, RoomParams, plant_step, room_step, valve
+from .physics import (
+    REACH_TOLERANCE,
+    Delay,
+    PlantParams,
+    PlantState,
+    RoomParams,
+    plant_step,
+    room_step,
+    valve,
+)
 
 STEP = timedelta(minutes=10)
 STEP_H = STEP.total_seconds() / 3600
@@ -80,6 +89,7 @@ class RoomInput:
     events: list[tuple[datetime, datetime]] = field(default_factory=list)  # (Beginn, Ende), sortiert
     fixed: float | None = None  # Sollwert, der nicht geplant wird (Handverstellung, Automatik aus)
     committed: str | None = None  # laeuft schon: "pre" (Vorstufe), "main" (heizt auf Komfort), "warm" (haelt Komfort)
+    valve: float | None = None  # aktuelle Ventilstellung 0..1 (Vorgeschichte fuer die Totzeit)
 
 
 @dataclass
@@ -156,10 +166,11 @@ def simulate(
     temps = [r.temp for r in rooms]
     params = [
         # vorsichtig = jeder Raum reagiert um den Sicherheitsfaktor langsamer
-        # (Aufheizen und Auskuehlen), Aufheizdauern also um diesen Faktor laenger
-        replace(r.params, a=r.params.a / factor, b=r.params.b / factor)
+        # (Aufheizen, Auskuehlen, Totzeit), Aufheizdauern also um diesen Faktor laenger
+        replace(r.params, a=r.params.a / factor, b=r.params.b / factor, d=r.params.d * factor)
         for r, factor in ((r, r.safety if cautious else 1.0) for r in rooms)
     ]
+    delays = [Delay(p.d, STEP_H, r.valve or 0.0) for r, p in zip(rooms, params)]
     reach: dict[str, datetime | None] = {r.name: None for r in rooms}
     peak = {r.name: r.temp for r in rooms}
     energy = 0.0
@@ -172,7 +183,8 @@ def simulate(
         energy += supply * STEP_H
         out = outside(moment)
         temps = [
-            room_step(t, p, v * share, out, STEP_H) for t, p, v in zip(temps, params, valves)
+            room_step(t, p, delay.push(v * share), out, STEP_H)
+            for t, p, v, delay in zip(temps, params, valves, delays)
         ]
         moment += STEP
         for room, temp in zip(rooms, temps):
@@ -452,6 +464,13 @@ def plan_heating(
                 staged, cost = trial, trial_cost
         if cost < best - 1e-6:
             plans, best = {**plans, room.name: staged}, cost
+
+    # Ein warmer Raum kuehlt nur ab, wenn er laut fertigem Plan mindestens
+    # COOLDOWN_MIN lang nicht heizt; sonst lohnen die zwei Befehle nicht.
+    for room in movable:
+        start = plans[room.name].heat_start()
+        if room.committed == "warm" and start is not None and start - now < COOLDOWN_MIN:
+            plans = {**plans, room.name: make(room, now)}
 
     result = run(plans)
     nominal = run(plans, cautious=False)

@@ -31,3 +31,4 @@ kalibrierlauf:
           step: 0.5
           unit_of_measurement: h
 kalibrierlauf_abbrechen:
+aus_historie_lernen:

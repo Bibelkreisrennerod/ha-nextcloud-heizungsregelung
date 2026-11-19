@@ -10,15 +10,17 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.3.0. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.3.1. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
 
-- **Physikalisches Modell:** Je Raum drei gelernte Größen: Auskühlrate
+- **Physikalisches Modell:** Je Raum vier gelernte Größen: Auskühlrate
   (Wärmeverlust, K/h je Kelvin Unterschied nach außen), maximale
-  Aufheizrate (K/h bei offenen Ventilen und vollem Puffer) und
-  Leistungsbedarf (Anteil der Kessel-Dauerleistung bei offenen Ventilen).
+  Aufheizrate (K/h bei offenen Ventilen und vollem Puffer),
+  Leistungsbedarf (Anteil der Kessel-Dauerleistung bei offenen Ventilen)
+  und Totzeit (wie lange es nach dem Öffnen der Ventile dauert, bis die
+  Wärme am Temperaturfühler ankommt).
   Für die Anlage: Kessel-Dauerleistung, Anlaufzeit und nutzbare
   Pufferreserve. Zieht ein Raum mehr als der Kessel liefert (der Saal), deckt
   der Puffer die Lücke, bis er leer ist; danach teilen sich alle offenen
@@ -44,6 +46,16 @@ Nextcloud direkt ab.
   Sicherheitszuschlag passt sich so an, dass rund 95 % der Termine pünktlich
   warm sind (Start 25 %). Gelernt wird auch bei ausgeschalteter Automatik,
   dann aus dem Homematic-Profil.
+- **Lernen aus der Historie:** Beim ersten Start liest die Integration die
+  vom Recorder gespeicherten Raumtemperaturen, Sollwerte und Ventilstellungen
+  (meist die letzten 10 Tage) und lernt daraus, statt bei null anzufangen.
+  Der Dienst `nextcloud_raumbelegung.aus_historie_lernen` wiederholt das und
+  verwirft dabei die bisher gelernten Werte.
+- **Kalibriert:** Alle 30 Minuten rechnet die Steuerung die letzten
+  2 Stunden je Raum nach und vergleicht mit der Messung. Liegt der mittlere
+  Fehler unter 0,5 K (nach mindestens 12 Stunden ohne und 4 Stunden mit
+  Heizen), gilt das Modell des Raums als kalibriert. Bis dahin plant sie mit
+  mindestens 25 % Sicherheitszuschlag.
 - **Kalibrierlauf:** Der Dienst `nextcloud_raumbelegung.kalibrierlauf` heizt
   an einem freien Tag einen oder mehrere Räume unter idealen Bedingungen auf
   (Puffer voll, andere Räume tiefer abgesenkt). Zwei Läufe reichen für den
@@ -121,6 +133,9 @@ Je Raum ein Gerät:
 | Auskühlrate | Temperaturverlust in K/h bei 20 K Unterschied nach außen |
 | Max. Aufheizrate | K/h bei offenen Ventilen und vollem Puffer |
 | Leistungsbedarf | Anteil der Kessel-Dauerleistung bei offenen Ventilen (Attribut kW) |
+| Totzeit | Minuten vom Öffnen der Ventile, bis die Wärme am Fühler ankommt |
+| Vorhersagefehler | Mittlere Abweichung der 2-Stunden-Vorhersage von der Messung (K) |
+| Modell kalibriert | An, wenn der Vorhersagefehler unter 0,5 K liegt |
 | Heizprotokoll | Letzte Heizvorgänge mit Start, erreicht um, Abweichung zur Frist |
 | Komforttemperatur | Zieltemperatur während Terminen (Standard 21 °C) |
 | Vorheizzeit Startwert | Wie lange der Raum allein von 14 auf 21 °C braucht, bei 0 °C außen; gilt, bis gemessen wurde (Standard 120 min) |

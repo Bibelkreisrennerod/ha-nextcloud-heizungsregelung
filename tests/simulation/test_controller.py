@@ -35,6 +35,12 @@ def publish():
     hass.states["weather.home"]=State("rainy",{"temperature":round(outside_at(stubs.NOW[0]),1)})
     hass.states["sensor.flow"]=State(str(round(20+50*SHARE[0],1)),{})
     hass.states["sensor.hmip_duty_cycle"]=State("10",{})
+    if RECORD[0]:
+        for e,st in hass.states.items():
+            hist=stubs.RECORDED.setdefault(e,[])
+            if not hist or hist[-1].state!=st.state or hist[-1].attributes!=st.attributes:
+                hist.append(State(st.state,dict(st.attributes),stubs.NOW[0]))
+RECORD=[False]
 def physics():
     dt=1/60
     vs={r:P.valve(hass.setpoints[f"climate.{aid}"],temps[r]) for r,(aid,_,_) in ROOMS.items()}
@@ -62,7 +68,25 @@ def cmds(since):
 async def main(mode):
     stubs.NOW[0]=datetime(2026,11,18,12,0,tzinfo=timezone.utc)
     rt.coordinator.data=Data([],list(ROOMS))
+    if mode=="history":
+        # 3 Tage Homematic-Profil ohne Integration aufzeichnen (wie der Recorder)
+        RECORD[0]=True
+        for _ in range(3*24*60):
+            t=stubs.NOW[0]+timedelta(minutes=1); stubs.NOW[0]=t
+            hass.setpoints["climate.saal"]=21.0 if 16<=t.hour<20 else 14.0
+            hass.setpoints["climate.kuche"]=21.0 if 9<=t.hour<12 else 14.0
+            hass.setpoints["climate.ng"]=21.0 if 17<=t.hour<19 else 14.0
+            publish(); physics()
+        RECORD[0]=False
     await c.async_start()
+    for cb in list(stubs.CALL_LATER): await cb(stubs.NOW[0])
+    if mode=="history":
+        for r in ROOMS:
+            p=c.room_params(r); t=ROOMS[r][2]; st=c.learner.room_stats(r)
+            print(f"{r[:18]:18} a {p.a:.3f}/{t.a:.3f} b {p.b:.2f}/{t.b:.2f} w {p.w:.2f}/{t.w:.2f} d {p.d*60:.0f}/{t.d*60:.0f} min  Auskuehlfenster {st.cool_windows} Heizfenster {st.heat_windows} kalibriert {c.learner.calibrated(r)}")
+        print("Heizphasen",c.learner.plant.episodes,"Puffer",round(c.plant_params().e_buf,2),"Notiz:",stubs.NOTES.get("nextcloud_raumbelegung_history"))
+        print("gespeichert bootstrapped:",stubs.Store.DATA["nextcloud_raumbelegung.e1"]["bootstrapped"])
+        return
     if mode=="observe":
         rt.settings[(None,"automatic")]=0.0
         # Homematic-Profil: Saal Mi 18-20 Uhr auf 21

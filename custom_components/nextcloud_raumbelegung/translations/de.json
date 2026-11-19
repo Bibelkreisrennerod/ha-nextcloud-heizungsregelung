@@ -43,6 +43,13 @@
       },
       "occupied": {
         "name": "Belegt"
+      },
+      "calibrated": {
+        "name": "Modell kalibriert",
+        "state": {
+          "on": "Ja",
+          "off": "Nein"
+        }
       }
     },
     "number": {
@@ -130,6 +137,12 @@
       },
       "global_calibration": {
         "name": "Kalibrierung"
+      },
+      "dead_time": {
+        "name": "Totzeit"
+      },
+      "prediction_error": {
+        "name": "Vorhersagefehler"
       }
     }
   },
@@ -177,6 +190,10 @@
     "kalibrierlauf_abbrechen": {
       "name": "Kalibrierlauf abbrechen",
       "description": "Bricht einen angeforderten oder laufenden Kalibrierlauf ab."
+    },
+    "aus_historie_lernen": {
+      "name": "Aus der Historie lernen",
+      "description": "Verwirft die gelernten Raum- und Anlagenwerte und lernt sie neu aus der gespeicherten Historie (Raumtemperaturen, Sollwerte, Ventile, Außentemperatur; so weit der Recorder zurückreicht, meist 10 Tage). Ergebnisse älterer Kalibrierläufe gehen dabei verloren; die Sicherheitsfaktoren aus dem Heizprotokoll bleiben."
     }
   }
 }

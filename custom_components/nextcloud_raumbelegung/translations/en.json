@@ -43,6 +43,9 @@
       },
       "occupied": {
         "name": "Occupied"
+      },
+      "calibrated": {
+        "name": "Model calibrated"
       }
     },
     "number": {
@@ -130,6 +133,12 @@
       },
       "global_calibration": {
         "name": "Calibration"
+      },
+      "dead_time": {
+        "name": "Dead time"
+      },
+      "prediction_error": {
+        "name": "Prediction error"
       }
     }
   },
@@ -177,6 +186,10 @@
     "kalibrierlauf_abbrechen": {
       "name": "Cancel calibration run",
       "description": "Cancels a requested or running calibration run."
+    },
+    "aus_historie_lernen": {
+      "name": "Learn from history",
+      "description": "Discards learned room and plant values and relearns them from the recorded history (room temperatures, setpoints, valves, outside temperature; as far back as the recorder goes, usually 10 days). Results of older calibration runs are lost; safety factors from the heating log are kept."
     }
   }
 }

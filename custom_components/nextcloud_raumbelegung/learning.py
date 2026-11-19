@@ -22,6 +22,14 @@ Fenster:
   macht Pufferreserve und Leistungsbedarf viel genauer bestimmbar als die
   Raumtemperaturen allein.
 - Kessel-Anlaufzeit und -Leistung aus StokerCloud.
+- Vorhersagegüte: Alle 30 Minuten wird der Verlauf der letzten 2 Stunden aus
+  dem Startwert mit den gemessenen Ventilstellungen nachgerechnet und mit
+  der Messung verglichen. Ein Raum gilt als kalibriert, wenn genug Ruhe- und
+  Heizfenster ausgewertet sind und der mittlere Fehler unter 0,5 K liegt;
+  bis dahin bleibt der Sicherheitsfaktor bei mindestens 1,25.
+- Totzeit: Zeit vom Oeffnen der Ventile (aus der Ruhe) bis die Temperatur um
+  RISE Kelvin gestiegen ist, abzueglich der Zeit, die der Anstieg selbst mit
+  der bekannten Aufheizrate braucht.
 
 Jeder Wert startet bei einem Startwert, der wie eine Handvoll Messungen
 zaehlt; aeltere Messungen verlieren langsam an Gewicht (Halbwertszeit etwa
@@ -36,7 +44,7 @@ from datetime import datetime, timedelta
 import math
 from typing import Any
 
-from .physics import PlantParams, PlantState, RoomParams, b_for_minutes, plant_step
+from .physics import Delay, PlantParams, PlantState, RoomParams, b_for_minutes, plant_step, room_step
 
 SAMPLE = timedelta(minutes=5)
 DECAY = 0.9998  # je Messpunkt, Halbwertszeit ~ 12 Tage
@@ -55,6 +63,17 @@ LAMBDA_E = 1.0
 MIN_EPISODE_SAMPLES = 12  # mindestens 1 h Gewinnmessung
 MAX_EPISODE = timedelta(hours=8)
 LAMBDA_T = 1.0
+PRIOR_D = 0.15  # Totzeit-Startwert (h)
+LAMBDA_D = 2.0  # Startwert zaehlt wie zwei gemessene Heizbeginne
+DEAD_MAX = 1.5  # groesste plausible Totzeit (h)
+RISE = 0.3  # Anstieg (K), ab dem die Waerme als angekommen gilt
+CHECK_SPAN = 24  # Messpunkte (2 h) je Vorhersagepruefung
+CHECK_EVERY = 6  # alle 30 min pruefen
+CHECK_ALPHA = 0.1  # Gewicht einer neuen Pruefung im gleitenden Mittel
+CALIBRATED_ERROR = 0.5  # K
+CALIBRATED_IDLE = 24  # Ruhefenster (12 h)
+CALIBRATED_HEAT = 8  # Heizfenster (4 h)
+SAFETY_UNCALIBRATED = 1.25
 FLOW_ROOM = 20.0  # Bezug fuer die Heizkoerperleistung (Grad)
 FLOW_MIN_SPAN = 15.0  # Vorlauf bei vollem Puffer muss so weit ueber FLOW_ROOM liegen
 FLOW_WEIGHT = 2.0  # Gewicht des Vorlaufs gegenueber den Raumtemperaturen
@@ -91,6 +110,13 @@ class RoomStats:
     ratios: list[float] = field(default_factory=list)  # tatsaechlich / vorhergesagt
     cycles: int = 0
     valves: int = 1  # Anzahl Heizkoerperventile (fuer den Startwert von w)
+    sw_d: float = 0.0
+    swd_d: float = 0.0
+    dead_events: int = 0
+    err_idle: float | None = None  # mittlerer Vorhersagefehler (K) ohne Heizen
+    err_idle_n: int = 0
+    err_heat: float | None = None  # ... mit Heizen
+    err_heat_n: int = 0
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -141,6 +167,10 @@ class Learner:
         self._outside: deque[tuple[datetime, float | None, float]] = deque(maxlen=COOL_WINDOW + 1)
         self._closed_since: dict[str, datetime | None] = {}
         self._open_since: dict[str, datetime | None] = {}
+        self._dead: dict[str, tuple[datetime, float]] = {}  # laufende Totzeitmessung: (Oeffnung, Temperatur)
+        # Verlauf je Raum fuer die Vorhersagepruefung: (Temp, Ventil, aussen, Versorgungsanteil)
+        self._track: dict[str, deque[tuple[float | None, float | None, float | None, float]]] = {}
+        self._track_count = 0
         self._episode: dict[str, Any] | None = None
         self._last_episode_end: datetime | None = None
         self._flow_full: float | None = data.get("flow_full")
@@ -164,10 +194,12 @@ class Learner:
         a = min(max(a, 0.005), 0.5)
         w = (stats.sww_w + LAMBDA_W * self._w_prior(room)) / (stats.sw_w + LAMBDA_W)
         w = min(max(w, 0.02), 5.0)
-        b0 = b_for_minutes(prior_minutes, a, w, self.plant_params(PlantParams()))
+        d = (stats.swd_d + LAMBDA_D * PRIOR_D) / (stats.sw_d + LAMBDA_D)
+        d = min(max(d, 0.0), DEAD_MAX)
+        b0 = b_for_minutes(prior_minutes, a, w, self.plant_params(PlantParams()), d)
         b = (stats.swb_b + LAMBDA_B * b0) / (stats.sw_b + LAMBDA_B)
         b = min(max(b, 0.1), 20.0)
-        return RoomParams(a=a, b=b, w=w)
+        return RoomParams(a=a, b=b, w=w, d=d)
 
     def _w_prior(self, room: str) -> float:
         valves = self.room_stats(room).valves
@@ -183,13 +215,30 @@ class Learner:
         )
 
     def safety(self, room: str) -> float:
-        """Sicherheitsfaktor: 95-%-Quantil von tatsaechlich/vorhergesagt."""
+        """Sicherheitsfaktor: 95-%-Quantil von tatsaechlich/vorhergesagt.
+
+        Solange das Modell des Raums nicht kalibriert ist, mindestens 1,25.
+        """
         ratios = self.room_stats(room).ratios
         if len(ratios) < 5:
-            return 1.25
-        ordered = sorted(ratios)
-        index = min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1)
-        return min(max(ordered[index], 1.0), 2.0)
+            value = SAFETY_UNCALIBRATED
+        else:
+            ordered = sorted(ratios)
+            index = min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1)
+            value = min(max(ordered[index], 1.0), 2.0)
+        if not self.calibrated(room):
+            value = max(value, SAFETY_UNCALIBRATED)
+        return value
+
+    def calibrated(self, room: str) -> bool:
+        """Sagt das Modell den Raum genau genug voraus?"""
+        stats = self.room_stats(room)
+        return (
+            stats.err_idle_n >= CALIBRATED_IDLE
+            and stats.err_heat_n >= CALIBRATED_HEAT
+            and stats.err_idle is not None and stats.err_idle < CALIBRATED_ERROR
+            and stats.err_heat is not None and stats.err_heat < CALIBRATED_ERROR
+        )
 
     def add_ratio(self, room: str, actual_minutes: float, predicted_minutes: float) -> None:
         if predicted_minutes < 10 or actual_minutes <= 0:
@@ -231,8 +280,12 @@ class Learner:
         boiler_kw: float | None = None,
         calibration: bool = False,
         flow: float | None = None,
+        share: float | None = None,
     ) -> None:
         """Einen 5-Minuten-Messpunkt verarbeiten.
+
+        share: geschaetzter Versorgungsanteil 0..1 in diesem Messintervall
+        (aus der Pufferschaetzung der Steuerung), fuer die Vorhersagepruefung.
 
         calibration: Kalibrierlauf; er beginnt aus der Ruhe, der Puffer gilt
         beim Start als voll.
@@ -248,7 +301,7 @@ class Learner:
         gains: dict[str, float | None] = {}
         for name, sample in rooms.items():
             stats = self.room_stats(name)
-            for key in ("sxx", "sxy", "sw_b", "swb_b", "sw_w", "sww_w"):
+            for key in ("sxx", "sxy", "sw_b", "swb_b", "sw_w", "sww_w", "sw_d", "swd_d"):
                 setattr(stats, key, getattr(stats, key) * DECAY)
             window = self._windows.setdefault(name, deque(maxlen=COOL_WINDOW + 1))
             window.append(sample)
@@ -258,10 +311,41 @@ class Learner:
                         self._closed_since[name] = now
                 else:
                     self._closed_since[name] = None
+                if sample.valve >= VALVE_OPEN:
+                    if self._open_since.get(name) is None:
+                        self._open_since[name] = now
+                else:
+                    self._open_since[name] = None
             params = self.room_params(name, prior_minutes.get(name, 120.0))
+            track = self._track.setdefault(name, deque(maxlen=CHECK_SPAN + 1))
+            track.append((sample.temp, sample.valve, outside, 1.0 if share is None else share))
+            if self._track_count % CHECK_EVERY == 0:
+                self._check(stats, track, params)
             self._cooling(name, stats, window)
-            gains[name] = self._gain(window, params)
+            self._deadtime(name, stats, window, params, outside)
+            gains[name] = self._gain(window, params, self._open_since.get(name))
+        self._track_count += 1
         self._episode_step(now, rooms, gains, buffer_fraction, boiler_kw, plant, prior_minutes, calibration, flow)
+
+    def _check(self, stats: RoomStats, track: deque, params: RoomParams) -> None:
+        """Die letzten 2 Stunden aus dem Startwert nachrechnen und mit der Messung vergleichen."""
+        if len(track) < CHECK_SPAN + 1:
+            return
+        if any(t is None or v is None or o is None for t, v, o, _ in track):
+            return
+        hours = SAMPLE.total_seconds() / 3600
+        first = track[0]
+        temp = first[0]
+        delay = Delay(params.d, hours, first[1] * first[3])
+        for t, v, o, s in list(track)[:-1]:
+            temp = room_step(temp, params, delay.push(v * s), o, hours)
+        error = abs(temp - track[-1][0])
+        if any(v >= 0.3 for _, v, _, _ in track):
+            stats.err_heat = error if stats.err_heat is None else (1 - CHECK_ALPHA) * stats.err_heat + CHECK_ALPHA * error
+            stats.err_heat_n += 1
+        else:
+            stats.err_idle = error if stats.err_idle is None else (1 - CHECK_ALPHA) * stats.err_idle + CHECK_ALPHA * error
+            stats.err_idle_n += 1
 
     def _outside_mean(self, start: datetime, end: datetime) -> float | None:
         values = [o for t, o, _ in self._outside if start <= t <= end and o is not None]
@@ -295,10 +379,52 @@ class Learner:
         stats.sxy += x * y
         stats.cool_windows += 1
 
-    def _gain(self, window: deque[RoomSample], params: RoomParams) -> float | None:
-        """Waermegewinn je Ventiloeffnung (K/h) im letzten 15-Minuten-Fenster."""
+    def _deadtime(
+        self, name: str, stats: RoomStats, window: deque[RoomSample], params: RoomParams, outside: float | None
+    ) -> None:
+        """Totzeit messen: Ventile oeffnen aus der Ruhe, bis die Temperatur steigt."""
+        if len(window) < 2:
+            return
+        previous, current = window[-2], window[-1]
+        if current.temp is None or current.valve is None:
+            self._dead.pop(name, None)
+            return
+        pending = self._dead.get(name)
+        if pending is None:
+            if (
+                previous.valve is not None and previous.valve < 0.3
+                and previous.temp is not None and current.valve >= VALVE_OPEN
+            ):
+                self._dead[name] = (current.time, previous.temp)
+            return
+        opened, start_temp = pending
+        elapsed = (current.time - opened).total_seconds() / 3600
+        if current.valve < 0.5 or elapsed > DEAD_MAX + 1.0:
+            self._dead.pop(name, None)  # abgebrochen oder unklar
+            return
+        if current.temp < start_temp + RISE:
+            return
+        self._dead.pop(name, None)
+        loss = params.a * (current.temp - outside) if outside is not None else 0.0
+        rate = max(params.b - loss, 0.3)
+        dead = elapsed - RISE / rate
+        if -0.1 <= dead <= DEAD_MAX:
+            stats.sw_d += 1.0
+            stats.swd_d += max(dead, 0.0)
+            stats.dead_events += 1
+
+    def _gain(
+        self, window: deque[RoomSample], params: RoomParams, open_since: datetime | None = None
+    ) -> float | None:
+        """Waermegewinn je Ventiloeffnung (K/h) im letzten 15-Minuten-Fenster.
+
+        Waehrend der Totzeit nach dem Oeffnen kommt noch keine Waerme an; diese
+        Fenster zaehlen nicht.
+        """
         recent = list(window)[-(HEAT_WINDOW + 1):]
         if len(recent) < HEAT_WINDOW + 1:
+            return None
+        if open_since is not None and recent[0].time < open_since + timedelta(hours=params.d):
             return None
         if any(s.temp is None or s.valve is None or s.valve < VALVE_OPEN for s in recent):
             return None
@@ -372,13 +498,15 @@ class Learner:
     ) -> dict[str, Any] | None:
         """Kessel-/Puffermodell an eine abgeschlossene Heizphase anpassen."""
         rows = episode["rows"]
+        # Raeume koennen in einzelnen Messpunkten fehlen (Temperatur unbekannt)
+        names = sorted({name for row in rows for name in row["valves"]})
         heating = [
-            name for name in rows[0]["valves"]
+            name for name in names
             if sum(1 for row in rows if row["gains"].get(name) is not None) >= MIN_EPISODE_SAMPLES
         ]
         if not heating:
             return None
-        params = {name: self.room_params(name, prior_minutes.get(name, 120.0)) for name in rows[0]["valves"]}
+        params = {name: self.room_params(name, prior_minutes.get(name, 120.0)) for name in names}
         hours = SAMPLE.total_seconds() / 3600
         solo = len(heating) == 1
         rested = episode.get("rested", False)
@@ -424,12 +552,17 @@ class Learner:
                 result.append(share)
             return result
 
+        # Waerme kommt um die Totzeit verzoegert an: der Gewinn in Zeile i
+        # gehoert zum Versorgungsanteil in Zeile i - lag.
+        lags = {name: round(params[name].d / hours) for name in heating}
+
         def residual(share_list: list[float]) -> tuple[float, dict[str, float]]:
             total = 0.0
             b_values = {}
             for name in heating:
+                lag = lags[name]
                 pairs = [
-                    (row["gains"][name], s) for row, s in zip(rows, share_list)
+                    (row["gains"][name], share_list[max(0, i - lag)]) for i, row in enumerate(rows)
                     if row["gains"].get(name) is not None
                 ]
                 ss = sum(s * s for _, s in pairs)
@@ -466,6 +599,7 @@ class Learner:
         scale_free = [0.25 * (1.12**i) for i in range(30)]  # 0.25 .. ~6.6
         # Grundlage: bisherige w, Puffer frei (sofern erlaubt)
         best = search([current.e_buf] if fixed_buffer else e_free, [1.0])
+        base = best
         if scaled:
             trial = search([current.e_buf] if fixed_buffer else e_free, scale_free)
             # Allein heizender Raum: genau dafuer gedacht, das Ergebnis gilt.
@@ -475,15 +609,21 @@ class Learner:
             ):
                 best = trial
         total, e_buf, scale, b_values, min_share = best
+        adjustable = set(scaled)
         if best[2] == 1.0:
             scaled = set()
         # Knapp = der Puffer war leer. Mit Vorlauf direkt gemessen, sonst nur,
         # wenn das Modell mit Knappheit den Verlauf deutlich besser erklaert.
         flow_short = use_flow and min(m for m in measured if m is not None) < 0.9
-        shortage = (min_share < 0.85 or flow_short) and total < 0.8 * flat_total
+        # Heizt ein Raum allein, reicht schon ein kleiner Einbruch, wenn er den
+        # Verlauf deutlich besser erklaert.
+        dip = 0.95 if solo else 0.85
+        shortage = (min_share < dip or flow_short) and total < 0.8 * flat_total
         fit = {
             "raeume": heating, "allein": solo, "knapp": shortage,
             "fehler": round(total / len(heating), 4), "vorlauf": use_flow,
+            "fehler_ohne_engpass": round(flat_total / len(heating), 4),
+            "kleinster_anteil": round(min_share, 2),
         }
         if total / len(heating) > 0.05:
             # Modell erklaert den Verlauf nicht (z. B. Fenster offen, Stoerung): verwerfen
@@ -512,6 +652,28 @@ class Learner:
                 "b": round(b, 2),
                 "w": round(params[name].w * scale, 2) if shortage and name in scaled else None,
             }
+        # Engpass erwartet, aber nicht eingetreten: die Raeume ziehen weniger
+        # als angenommen. Ihr w wird hoechstens so gross gesetzt, dass das
+        # Modell keinen Engpass mehr zeigt (vorsichtige Obergrenze).
+        if (
+            adjustable and not shortage and not use_flow
+            and base[4] < 0.85 and base[0] > 1.5 * flat_total
+        ):
+            upper = None
+            scaled = adjustable  # shares() skaliert die Raeume in 'scaled'
+            for factor in sorted((f for f in scale_free if f < 1.0), reverse=True):
+                if min(shares(factor, current.e_buf, True)) >= 0.95:
+                    upper = factor
+                    break
+            if upper is None:
+                scaled = set()
+            else:
+                w_weight = (weight if solo else weight / 2) / 2
+                for name in scaled:
+                    stats = self.room_stats(name)
+                    stats.sw_w += w_weight
+                    stats.sww_w += w_weight * params[name].w * upper
+                    fit.setdefault(name, {})["w_hoechstens"] = round(params[name].w * upper, 2)
         if shortage and not fixed_buffer:
             self.plant.e_sum += weight * e_buf
             self.plant.e_w += weight

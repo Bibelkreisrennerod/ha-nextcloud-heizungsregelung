@@ -1,4 +1,4 @@
-"""Binaersensoren je Raum: Heizbedarf (Steuerung) und Belegt (Kalender)."""
+"""Binaersensoren je Raum: Heizbedarf (Steuerung), Belegt (Kalender), Modell kalibriert."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ async def async_setup_entry(
     add_room_entities(
         entry,
         async_add_entities,
-        lambda room: [HeatingDemand(entry, room), Occupied(entry, room)],
+        lambda room: [HeatingDemand(entry, room), Occupied(entry, room), ModelCalibrated(entry, room)],
     )
 
 
@@ -74,3 +74,27 @@ class Occupied(StatusEntity, BinarySensorEntity):
             self._room in event.rooms and not event.all_day and event.start <= now < event.end
             for event in (data.events if data else [])
         )
+
+
+class ModelCalibrated(StatusEntity, BinarySensorEntity):
+    """An, wenn das Modell den Raum genau genug vorhersagt (Fehler unter 0,5 K)."""
+
+    _attr_icon = "mdi:check-decagram"
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "calibrated")
+
+    @property
+    def is_on(self) -> bool | None:
+        if not self._status:
+            return None
+        return bool(self._status.get("calibrated"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        status = self._status
+        return {
+            "sicherheitsfaktor": round(status["safety"], 2) if status.get("safety") else None,
+            "fenster_ohne_heizen": status.get("err_idle_n"),
+            "fenster_beim_heizen": status.get("err_heat_n"),
+        }

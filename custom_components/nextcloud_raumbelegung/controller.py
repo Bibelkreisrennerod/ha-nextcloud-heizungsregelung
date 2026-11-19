@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from functools import partial
 import logging
 from typing import Any, Callable
 
@@ -39,7 +40,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -77,6 +78,7 @@ from .const import (
     SETPOINT_TOLERANCE,
     SOURCE_ALERT_AFTER,
 )
+from .history import ReplayResult, RoomSeries, Series, replay
 from .learning import Learner, RoomSample, flow_share
 from .physics import PlantParams, PlantState, RoomParams, plant_step, valve
 from .planning import (
@@ -93,6 +95,8 @@ from .stokercloud import StokerCloudClient, StokerCloudError, StokerData
 _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
 SAMPLE_HOURS = SAMPLE_INTERVAL.total_seconds() / 3600
+HISTORY_DAYS = 14  # so weit zurueck aus dem Recorder lernen (er haelt meist 10 Tage)
+BOOTSTRAP_DELAY = 120  # s nach dem Start, damit alle Entitaeten geladen sind
 
 
 def signal_status(entry: ConfigEntry) -> str:
@@ -242,6 +246,10 @@ class HeatingController:
         self._unsub: Callable[[], None] | None = None
         self._lock = asyncio.Lock()
         self._sent: list[datetime] = []  # eigene Befehle der letzten Stunde
+        self._bootstrapped = False  # schon einmal aus der Historie gelernt
+        self._learning_history = False  # Live-Messung pausiert (Historie wird gelesen)
+        self._history_running = False
+        self._unsub_bootstrap: Callable[[], None] | None = None
 
     # ------------------------------------------------------------ Lebenszyklus
 
@@ -253,16 +261,37 @@ class HeatingController:
         except (TypeError, ValueError, KeyError) as err:
             _LOGGER.warning("Gelernte Werte nicht lesbar, beginne neu: %s", err)
             self.learner = Learner()
+        self._bootstrapped = bool(data.get("bootstrapped"))
         self._unsub = async_track_time_interval(self.hass, self._async_tick, CONTROL_INTERVAL)
+        if not self._bootstrapped:
+            # Beim ersten Start aus der Historie lernen; bis dahin nicht live messen,
+            # damit die Messpunkte in zeitlicher Reihenfolge ankommen.
+            self._learning_history = True
+            self._unsub_bootstrap = async_call_later(self.hass, BOOTSTRAP_DELAY, self._async_bootstrap)
+
+    async def _async_bootstrap(self, _now: datetime) -> None:
+        self._unsub_bootstrap = None
+        try:
+            await self.async_learn_from_history(reset=False)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Lernen aus der Historie fehlgeschlagen")
+            self._learning_history = False
 
     async def async_stop(self) -> None:
         if self._unsub:
             self._unsub()
             self._unsub = None
+        if self._unsub_bootstrap:
+            self._unsub_bootstrap()
+            self._unsub_bootstrap = None
         await self._store.async_save(self._data_to_store())
 
     def _data_to_store(self) -> dict[str, Any]:
-        return {"history": self.history, "learner": self.learner.to_dict()}
+        return {
+            "history": self.history,
+            "learner": self.learner.to_dict(),
+            "bootstrapped": self._bootstrapped,
+        }
 
     def _save(self) -> None:
         self._store.async_delay_save(self._data_to_store, 60)
@@ -659,7 +688,7 @@ class HeatingController:
             }
 
         # ---- 2: Messpunkt fuers Lernen, Pufferreserve
-        if self._sample_at is None or now - self._sample_at >= SAMPLE_INTERVAL:
+        if not self._learning_history and (self._sample_at is None or now - self._sample_at >= SAMPLE_INTERVAL):
             self._sample_at = now
             await self._sample(now, infos, outside, flow)
 
@@ -708,7 +737,7 @@ class HeatingController:
             demand += self.room_params(room).w * (info["valve"] or 0.0)
         # Pufferreserve fortschreiben; der Vorlauf korrigiert, wenn bekannt
         self.gauge.e = min(self.gauge.e, plant.e_buf)
-        plant_step(demand, plant, self.gauge, SAMPLE_HOURS)
+        _, share = plant_step(demand, plant, self.gauge, SAMPLE_HOURS)
         measured = flow_share(flow, self.learner.flow_full)
         if measured is not None and measured < 0.95:
             self.gauge.e = min(self.gauge.e, 0.25 * plant.e_buf * measured)
@@ -728,12 +757,130 @@ class HeatingController:
             self._boiler_kw(),
             calibration,
             flow,
+            share,
         )
         if self.learner.plant.episodes != episodes:
             self._force_plan = True  # neue Parameter
             fit = self.learner.plant.last_fit or {}
             _LOGGER.info("Heizphase ausgewertet: %s", fit)
         self._save()
+
+    # ------------------------------------------------- Lernen aus der Historie
+
+    async def async_learn_from_history(self, reset: bool = True) -> ReplayResult | None:
+        """Raumtemperaturen, Sollwerte und Ventile aus dem Recorder lesen und lernen.
+
+        reset=True (Dienst): gelernte Raum- und Anlagenwerte verwerfen und neu
+        aus der Historie lernen; Sicherheitsfaktoren aus dem Heizprotokoll
+        bleiben erhalten. reset=False (erster Start): nur, wenn noch nichts
+        gelernt ist.
+        """
+        from homeassistant.components.recorder import get_instance, history  # noqa: PLC0415
+
+        if not reset and (self.learner.plant.episodes or any(
+            stats.cool_windows or stats.heat_windows for stats in self.learner.rooms.values()
+        )):
+            self._bootstrapped = True
+            self._learning_history = False
+            self._save()
+            return None
+        if self._history_running:
+            raise HomeAssistantError("Das Lernen aus der Historie läuft bereits.")
+        self._history_running = True
+        self._learning_history = True
+        try:
+            data = self.runtime.coordinator.data
+            room_names = list(data.rooms) if data else list(self.rooms)
+            end = dt_util.utcnow().replace(second=0, microsecond=0)
+            start = end - timedelta(days=HISTORY_DAYS)
+            sources: dict[str, tuple[list[str], list[str]]] = {}
+            for room in room_names:
+                climates, area_id = self._climates(room)
+                if climates:
+                    sources[room] = (climates, self._valve_sensors(area_id))
+            outside_id = self.entry.options.get(CONF_OUTSIDE_SENSOR) or self.entry.options.get(
+                CONF_WEATHER, DEFAULT_WEATHER
+            )
+            flow_id = self.entry.options.get(CONF_FLOW_SENSOR) or er.async_get(self.hass).async_get_entity_id(
+                "sensor", DOMAIN, f"{self.entry.entry_id}_global_boiler_flow"
+            )
+            entity_ids = sorted(
+                {e for climates, valves in sources.values() for e in climates + valves}
+                | {e for e in (outside_id, flow_id) if e}
+            )
+            if not entity_ids:
+                return None
+            states = await get_instance(self.hass).async_add_executor_job(
+                partial(
+                    history.get_significant_states,
+                    self.hass,
+                    start,
+                    end,
+                    entity_ids=entity_ids,
+                    include_start_time_state=True,
+                    significant_changes_only=False,
+                    minimal_response=False,
+                    no_attributes=False,
+                )
+            )
+
+            def series(entity_id: str | None, attribute: str | None = None) -> Series:
+                result: Series = []
+                for state in (states or {}).get(entity_id, []) if entity_id else []:
+                    raw = state.attributes.get(attribute) if attribute else state.state
+                    try:
+                        value = float(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    result.append((state.last_updated, value))
+                return result
+
+            rooms = {
+                room: RoomSeries(
+                    temps=[series(c, "current_temperature") for c in climates],
+                    targets=[series(c, "temperature") for c in climates],
+                    valves=[series(v) for v in valves],
+                )
+                for room, (climates, valves) in sources.items()
+            }
+            outside = series(outside_id, None if outside_id.startswith("sensor.") else "temperature")
+            flow = series(flow_id)
+            fresh = Learner()
+            old = self.learner
+            for room, (_climates, valves) in sources.items():
+                stats = fresh.room_stats(room)
+                stats.valves = max(1, len(valves))
+                previous = old.rooms.get(room)
+                if previous is not None:
+                    stats.ratios, stats.cycles = list(previous.ratios), previous.cycles
+            prior = {room: self.setting(room, "preheat") for room in sources}
+            result = await self.hass.async_add_executor_job(
+                replay, fresh, rooms, outside, flow, start, end, prior, PlantParams(p_max_kw=self._boiler_nominal_kw())
+            )
+            self.learner = fresh
+            self.gauge = None
+            self._sample_at = None
+            self._bootstrapped = True
+            self._force_plan = True
+            self._save()
+            cool = sum(s.cool_windows for s in fresh.rooms.values())
+            heat = fresh.plant.episodes
+            first = min((p[0][0] for r in rooms.values() for p in r.temps if p), default=None)
+            if not result.samples:
+                _LOGGER.info("Keine Historie zum Lernen gefunden")
+                return result
+            self._notify(
+                "history",
+                "Aus der Historie gelernt",
+                f"Ausgewertet: {result.days:.1f} Tage"
+                + (f" ab {dt_util.as_local(first).strftime('%d.%m. %H:%M')}" if first else "")
+                + f", {cool} Auskühlfenster, {heat} Heizphasen. Die Werte stehen in den Sensoren der Räume.",
+            )
+            _LOGGER.info("Aus der Historie gelernt: %s Messpunkte, %s Heizphasen", result.samples, heat)
+            return result
+        finally:
+            self._learning_history = False
+            self._history_running = False
 
     # ------------------------------------------------------------ Planen
 
@@ -770,6 +917,7 @@ class HeatingController:
                     events=[(e.start, e.end) for e in info["events"] if e.start > now],
                     fixed=fixed,
                     committed=committed,
+                    valve=info["valve"],
                 )
             )
         return inputs
@@ -1139,6 +1287,13 @@ class HeatingController:
             "a": params.a,
             "b": params.b,
             "w": params.w,
+            "d": params.d,
+            "dead_events": stats.dead_events,
+            "calibrated": self.learner.calibrated(room),
+            "err_idle": stats.err_idle,
+            "err_heat": stats.err_heat,
+            "err_idle_n": stats.err_idle_n,
+            "err_heat_n": stats.err_heat_n,
             "boiler_kw": plant.p_max_kw,
             "safety": self.learner.safety(room),
             "cool_windows": stats.cool_windows,
@@ -1190,6 +1345,8 @@ class HeatingController:
             "auswertungen": self.learner.plant.episodes,
             "letzte_auswertung": self.learner.plant.last_fit,
             "kalibrierung": None if self.calibration is None else self.calibration.describe(),
+            "historie_gelernt": self._bootstrapped,
+            "lernt_aus_historie": self._learning_history,
             "kalibrierung_status": "aus"
             if self.calibration is None
             else ("läuft" if self.calibration.running else "wartet auf Ruhe"),

@@ -27,6 +27,7 @@ class Ent:
 class ER:
     def __init__(s,ents): s.entities={e.entity_id:e for e in ents}
     def async_get(s,eid): return s.entities.get(eid)
+    def async_get_entity_id(s,domain,platform,unique_id): return None
 class DR:
     def async_get(s,i): return None
 REG={}
@@ -36,6 +37,10 @@ drm=mod("homeassistant.helpers.device_registry"); drm.async_get=lambda h: DR()
 h=sys.modules["homeassistant.helpers"]; h.area_registry=arm; h.entity_registry=erm; h.device_registry=drm
 dm=mod("homeassistant.helpers.dispatcher"); dm.async_dispatcher_send=lambda *a:None
 ev=mod("homeassistant.helpers.event"); ev.async_track_time_interval=lambda h,cb,iv: (lambda:None)
+CALL_LATER=[]
+def _call_later(h,delay,cb):
+    CALL_LATER.append(cb); return lambda: None
+ev.async_call_later=_call_later
 st=mod("homeassistant.helpers.storage")
 class Store:
     DATA={}
@@ -51,7 +56,7 @@ udt.as_utc=lambda d: d.astimezone(timezone.utc)
 udt.parse_datetime=lambda s: datetime.fromisoformat(s)
 sys.modules["homeassistant.util"].dt=udt
 class State:
-    def __init__(s,state,attrs): s.state=state; s.attributes=attrs
+    def __init__(s,state,attrs,when=None): s.state=state; s.attributes=attrs; s.last_updated=when or NOW[0]
 class States(dict):
     def get(s,k): return dict.get(s,k)
 class Services:
@@ -76,3 +81,21 @@ udt.get_default_time_zone=lambda: timezone(timedelta(hours=1))
 exc=mod("homeassistant.exceptions")
 class HomeAssistantError(Exception): pass
 exc.HomeAssistantError=HomeAssistantError
+
+# Recorder: Historie aus RECORDED (entity_id -> [State]) liefern
+RECORDED={}
+rec=mod("homeassistant.components.recorder")
+class _Rec:
+    async def async_add_executor_job(s,f,*a): return f(*a)
+rec.get_instance=lambda h: _Rec()
+hist=mod("homeassistant.components.recorder.history")
+def get_significant_states(hass,start,end=None,entity_ids=None,**kw):
+    out={}
+    for e in entity_ids or []:
+        states=[st for st in RECORDED.get(e,[]) if st.last_updated<=end]
+        before=[st for st in states if st.last_updated<start]
+        inside=[st for st in states if st.last_updated>=start]
+        out[e]=(before[-1:] if kw.get("include_start_time_state") else [])+inside
+    return out
+hist.get_significant_states=get_significant_states
+rec.history=hist

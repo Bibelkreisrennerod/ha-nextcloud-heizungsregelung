@@ -2,11 +2,13 @@
 
 Raeume (je Raum r, Zeit in Stunden):
 
-    dT_r/dt = b_r * u_r - a_r * (T_r - T_aussen)
+    dT_r/dt = b_r * u_r(t - d_r) - a_r * (T_r - T_aussen)
 
     a_r  Auskuehlkonstante (1/h): Waermeverlust / Waermespeicher des Raums
     b_r  Aufheizrate bei offenen Ventilen und voller Versorgung (K/h)
     u_r  tatsaechliche Versorgung, 0..1 = Ventilstellung x Versorgungsanteil
+    d_r  Totzeit (h): so lange dauert es, bis Waerme aus geoeffneten Ventilen
+         am Temperaturfuehler ankommt (Heizkoerper aufwaermen, Luft umwaelzen)
 
 Kessel und Puffer (Leistungen in Vielfachen der Kessel-Dauerleistung):
 
@@ -28,6 +30,7 @@ zum Sollwert. So bildet das Modell auch Zwischen-Sollwerte ab.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -42,6 +45,7 @@ class RoomParams:
     a: float = 0.05  # 1/h  (Auskuehlzeitkonstante 1/a = 20 h)
     b: float = 2.0  # K/h
     w: float = 0.3  # Anteil der Kessel-Dauerleistung
+    d: float = 0.15  # Totzeit in h (9 min)
 
     def heat_loss(self, delta: float = 20.0) -> float:
         """Temperaturverlust in K/h bei 'delta' Kelvin Unterschied nach aussen."""
@@ -105,6 +109,27 @@ def plant_step(
     return supply, share
 
 
+class Delay:
+    """Totzeit: gibt den Wert zurueck, der vor 'dead' Stunden hineinging.
+
+    Liegt die Totzeit zwischen zwei Schritten, wird zwischen ihnen
+    interpoliert. Vor dem ersten Schritt gilt 'initial' als Vorgeschichte
+    (0 = Ventile waren zu).
+    """
+
+    def __init__(self, dead: float, dt: float, initial: float = 0.0) -> None:
+        steps = max(dead, 0.0) / dt if dt > 0 else 0.0
+        self._whole = int(steps)
+        self._part = steps - self._whole
+        self._history: deque[float] = deque([initial] * (self._whole + 2), maxlen=self._whole + 2)
+
+    def push(self, value: float) -> float:
+        self._history.append(value)
+        newer = self._history[-1 - self._whole]
+        older = self._history[-2 - self._whole]
+        return (1.0 - self._part) * newer + self._part * older
+
+
 def room_step(temp: float, params: RoomParams, supply: float, outside: float, dt: float) -> float:
     """Raumtemperatur um dt Stunden fortschreiben (supply = u_r, 0..1)."""
     return temp + (params.b * supply - params.a * (temp - outside)) * dt
@@ -121,28 +146,31 @@ def solo_minutes(
     """Aufheizdauer eines Raums, der allein heizt (voller Puffer), in Minuten."""
     state = PlantState(plant.e_buf)
     temp, minutes, dt = t_from, 0.0, 5 / 60
+    delay = Delay(params.d, dt)
     while temp < t_to - REACH_TOLERANCE and minutes < limit:
         opening = valve(t_to, temp)
         _, share = plant_step(params.w * opening, plant, state, dt)
-        temp = room_step(temp, params, opening * share, outside, dt)
+        temp = room_step(temp, params, delay.push(opening * share), outside, dt)
         minutes += 5
     return minutes
 
 
 @lru_cache(maxsize=256)
-def _b_for(minutes: float, a: float, w: float, e_buf: float, t_start: float) -> float:
+def _b_for(minutes: float, a: float, w: float, e_buf: float, t_start: float, d: float) -> float:
     plant = PlantParams(e_buf=e_buf, t_start=t_start)
     low, high = 0.05, 60.0
     for _ in range(40):
         mid = (low + high) / 2
-        if solo_minutes(RoomParams(a=a, b=mid, w=w), plant, limit=minutes + 60) > minutes:
+        if solo_minutes(RoomParams(a=a, b=mid, w=w, d=d), plant, limit=minutes + 60) > minutes:
             low = mid
         else:
             high = mid
     return high
 
 
-def b_for_minutes(minutes: float, a: float, w: float = 0.0, plant: PlantParams | None = None) -> float:
+def b_for_minutes(
+    minutes: float, a: float, w: float = 0.0, plant: PlantParams | None = None, d: float = 0.0
+) -> float:
     """Aufheizrate b, mit der ein Raum allein in 'minutes' von 14 auf 21 Grad
     kommt (bei 0 Grad aussen, voller Puffer, mit Kessel- und Pufferbegrenzung).
 
@@ -157,4 +185,5 @@ def b_for_minutes(minutes: float, a: float, w: float = 0.0, plant: PlantParams |
         round(w, 2),
         round(plant.e_buf, 2),
         round(plant.t_start, 2),
+        round(min(d, minutes / 60 / 2), 2),
     )

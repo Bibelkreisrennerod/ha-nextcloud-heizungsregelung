@@ -34,6 +34,8 @@ async def async_setup_entry(
             CoolingRateSensor(entry, room),
             HeatingRateSensor(entry, room),
             PowerDemandSensor(entry, room),
+            DeadTimeSensor(entry, room),
+            PredictionErrorSensor(entry, room),
             ProtocolSensor(entry, room),
         ],
         [
@@ -264,6 +266,57 @@ class PowerDemandSensor(StatusEntity, SensorEntity):
         return {
             "kw": round(w * kw, 1) if w is not None and kw else None,
             "gemessen": status.get("w_measured", False),
+        }
+
+
+class DeadTimeSensor(StatusEntity, SensorEntity):
+    """Totzeit: vom Oeffnen der Ventile, bis die Waerme am Fuehler ankommt."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+    _attr_suggested_display_precision = 0
+    _attr_icon = "mdi:timer-sand"
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "dead_time")
+
+    @property
+    def native_value(self) -> float | None:
+        d = self._status.get("d")
+        return round(d * 60) if d is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"gemessene_heizbeginne": self._status.get("dead_events")}
+
+
+class PredictionErrorSensor(StatusEntity, SensorEntity):
+    """Mittlerer Fehler der 2-Stunden-Vorhersage beim Heizen (K)."""
+
+    _attr_native_unit_of_measurement = UnitOfTemperature.KELVIN
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:target"
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "prediction_error")
+
+    @property
+    def native_value(self) -> float | None:
+        status = self._status
+        value = status.get("err_heat") if status.get("err_heat") is not None else status.get("err_idle")
+        return round(value, 2) if value is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        status = self._status
+        idle, heat = status.get("err_idle"), status.get("err_heat")
+        return {
+            "kalibriert": status.get("calibrated", False),
+            "fehler_ohne_heizen": round(idle, 2) if idle is not None else None,
+            "fehler_beim_heizen": round(heat, 2) if heat is not None else None,
+            "fenster_ohne_heizen": status.get("err_idle_n"),
+            "fenster_beim_heizen": status.get("err_heat_n"),
         }
 
 

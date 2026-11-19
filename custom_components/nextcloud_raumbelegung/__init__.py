@@ -21,6 +21,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 SERVICE_CALIBRATE = "kalibrierlauf"
 SERVICE_CALIBRATE_STOP = "kalibrierlauf_abbrechen"
+SERVICE_LEARN_HISTORY = "aus_historie_lernen"
 CALIBRATE_SCHEMA = vol.Schema(
     {
         vol.Required("raeume"): vol.All(cv.ensure_list, [cv.string]),
@@ -53,7 +54,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         await _controller(hass).async_stop_calibration("abgebrochen")
 
     hass.services.async_register(DOMAIN, SERVICE_CALIBRATE, calibrate, schema=CALIBRATE_SCHEMA)
+    async def learn_history(call: ServiceCall) -> None:
+        await _controller(hass).async_learn_from_history(reset=True)
+
     hass.services.async_register(DOMAIN, SERVICE_CALIBRATE_STOP, calibrate_stop)
+    hass.services.async_register(DOMAIN, SERVICE_LEARN_HISTORY, learn_history)
     return True
 
 
