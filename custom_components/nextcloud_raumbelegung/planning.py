@@ -86,7 +86,8 @@ class RoomInput:
     setback: float
     priority: int = 5  # 1 = hoechster Vorrang
     safety: float = 1.25  # Sicherheitsfaktor auf die Aufheizdauer
-    events: list[tuple[datetime, datetime]] = field(default_factory=list)  # (Beginn, Ende), sortiert
+    # (Beginn, Ende), sortiert; auch ein gerade laufender Termin (er belegt Kessel und Puffer)
+    events: list[tuple[datetime, datetime]] = field(default_factory=list)
     fixed: float | None = None  # Sollwert, der nicht geplant wird (Handverstellung, Automatik aus)
     committed: str | None = None  # laeuft schon: "pre" (Vorstufe), "main" (heizt auf Komfort), "warm" (haelt Komfort)
     valve: float | None = None  # aktuelle Ventilstellung 0..1 (Vorgeschichte fuer die Totzeit)
@@ -100,6 +101,7 @@ class RoomPlan:
     pre: datetime | None = None  # ab hier Vorstufe
     pre_level: float | None = None
     deadline: datetime | None = None
+    event_end: datetime | None = None  # Ende des Termins, fuer den geplant wird
     reach: datetime | None = None  # vorhergesagt (vorsichtig)
     reach_nominal: datetime | None = None  # vorhergesagt ohne Sicherheitsfaktor
     late: bool = False
@@ -127,14 +129,14 @@ def setpoint_at(room: RoomInput, plan: RoomPlan, moment: datetime, idle: Window 
     for start, end in room.events:
         if start <= moment < end:
             return room.comfort
-    if plan.main is not None and room.events:
-        first_end = room.events[0][1]
-        if plan.main <= moment < first_end:
+    if plan.main is not None and plan.deadline is not None and plan.event_end is not None:
+        if plan.main <= moment < plan.event_end:
             return room.comfort
-        # spaetere Termine: gleiche Vorlaufzeit wie beim ersten
-        lead = room.events[0][0] - plan.main
-        for start, end in room.events[1:]:
-            if start - lead <= moment < end:
+        # spaetere Termine: gleiche Vorlaufzeit wie beim geplanten
+        target_start = plan.deadline + EARLY
+        lead = target_start - plan.main
+        for start, end in room.events:
+            if start > target_start and start - lead <= moment < end:
                 return room.comfort
     if plan.pre is not None and plan.main is not None and plan.pre <= moment < plan.main:
         return plan.pre_level if plan.pre_level is not None else room.comfort
@@ -261,10 +263,10 @@ def plan_heating(
     base: dict[str, RoomPlan] = {}
     for room in rooms:
         plan = RoomPlan()
-        if room.fixed is None and room.events:
-            start, _end = room.events[0]
-            if start > now and start - EARLY <= now + HORIZON:
-                plan.deadline = start - EARLY
+        upcoming = _next_event(room, now)
+        if room.fixed is None and upcoming is not None:
+            plan.deadline = upcoming[0] - EARLY
+            plan.event_end = upcoming[1]
         base[room.name] = plan
     planned = [r for r in rooms if base[r.name].deadline is not None]
     if not planned:
@@ -286,7 +288,7 @@ def plan_heating(
     latest: dict[str, datetime] = {}
     for room in planned:
         solo = simulate(
-            [room], {room.name: RoomPlan(main=now, deadline=deadline[room.name])}, plant,
+            [room], {room.name: replace(base[room.name], main=now)}, plant,
             PlantState(plant.e_buf), outside, now, deadline[room.name] + timedelta(hours=12),
         )
         duration = (solo.reach[room.name] - now) if solo.reach[room.name] else timedelta(hours=12)
@@ -482,13 +484,21 @@ def plan_heating(
     return PlanResult(plans, _idle_window(rooms, plans), _cost(rooms, plans, result, until))
 
 
+def _next_event(room: RoomInput, now: datetime) -> tuple[datetime, datetime] | None:
+    """Naechster Termin, der noch beginnt und im Horizont liegt."""
+    for start, end in room.events:
+        if start > now:
+            return (start, end) if start - EARLY <= now + HORIZON else None
+    return None
+
+
 def plan_signature(rooms: list[RoomInput], now: datetime) -> tuple:
     """Alles, was bei Aenderung eine neue Planung erzwingt (Termine, Einstellungen)."""
     items = []
     for room in sorted(rooms, key=lambda r: r.name):
         events = tuple(
-            (start, end) for start, end in room.events if start > now and start - EARLY <= now + HORIZON
-        )[:1]
+            (start, end) for start, end in room.events if end > now and start - EARLY <= now + HORIZON
+        )
         items.append((room.name, events, room.comfort, room.setback, room.priority, room.fixed))
     return tuple(items)
 

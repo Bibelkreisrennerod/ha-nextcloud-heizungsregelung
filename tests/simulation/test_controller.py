@@ -1,3 +1,4 @@
+import json
 """Steuerung v0.3 im Zusammenspiel: Physik aus tests2/harness, HA-Stubs."""
 import sys, asyncio, importlib, random, math
 from datetime import datetime, timedelta, timezone
@@ -66,6 +67,7 @@ async def minutes(n, quiet=False):
 def cmds(since):
     return [(t.strftime("%a %H:%M"),d["entity_id"][0].split(".")[1],d.get("temperature",d.get("hvac_mode"))) for t,dom,s,d in hass.services.calls if dom=="climate" and t>=since]
 async def main(mode):
+    global c
     stubs.NOW[0]=datetime(2026,11,18,12,0,tzinfo=timezone.utc)
     rt.coordinator.data=Data([],list(ROOMS))
     if mode=="history":
@@ -111,6 +113,35 @@ async def main(mode):
         print("Auswertung:",c.learner.plant.last_fit)
         print("Befehle:",cmds(datetime(2026,11,1,tzinfo=timezone.utc))[:12],"...",cmds(datetime(2026,11,1,tzinfo=timezone.utc))[-4:])
         print("Modi:",{r:s.mode for r,s in c.rooms.items()})
+        return
+    rt.settings[(None,"automatic")]=1.0
+    if mode=="restart":
+        # 1) Kalibrierlauf ueberlebt einen Neustart (Speicher wie in HA als JSON)
+        await minutes(100)
+        await c.async_start_calibration(["Saal"],None,None,None)
+        await minutes(120)
+        running=c.calibration is not None and c.calibration.running
+        await c.async_stop()
+        key="nextcloud_raumbelegung.e1"
+        stubs.Store.DATA[key]=json.loads(json.dumps(stubs.Store.DATA[key]))
+        c=ctl.HeatingController(hass,Entry(),rt); await c.async_start()
+        print("Kalibrierung vor/nach Neustart laeuft:",running,c.calibration is not None and c.calibration.running)
+        await c.async_stop_calibration("abgebrochen")
+        # 2) Neustart mitten im Aufheizen: der Plan haelt am laufenden Aufheizen fest
+        day=datetime(2026,11,22,0,0,tzinfo=timezone.utc)
+        ev=[cal.RoomEvent("Gottesdienst",day+timedelta(hours=9),day+timedelta(hours=10,minutes=30),False,["Saal"],"","Gemeinde")]
+        rt.coordinator.data=Data(ev,list(ROOMS))
+        while stubs.NOW[0]<day+timedelta(hours=9) and c.rooms.get("Saal") is not None and c.rooms["Saal"].mode!="aufheizen" or stubs.NOW[0]<day:
+            await minutes(1)
+        await minutes(10)
+        before=c.rooms["Saal"].mode
+        await c.async_stop()
+        c=ctl.HeatingController(hass,Entry(),rt); await c.async_start()
+        since=stubs.NOW[0]
+        await minutes(1)
+        print("Saal vor/nach Neustart:",before,c.rooms["Saal"].mode,"zugesagt:",c._inputs["Saal"].committed if "Saal" in c._inputs else None)
+        await minutes(30)
+        print("Befehle nach Neustart:",[x for x in cmds(since) if x[1]=="saal"])
         return
     # Automatik an: Sonntag Gottesdienst
     day=datetime(2026,11,22,0,0,tzinfo=timezone.utc)

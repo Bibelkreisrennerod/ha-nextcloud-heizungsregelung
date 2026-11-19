@@ -24,6 +24,7 @@ sofort wieder. Faellt Home Assistant aus, bleibt der letzte Sollwert stehen.
 from __future__ import annotations
 
 import asyncio
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
@@ -199,6 +200,32 @@ class Calibration:
     def running(self) -> bool:
         return self.started is not None
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "rooms": self.rooms,
+            "target": self.target,
+            "others": self.others,
+            "hours": self.hours,
+            "requested": self.requested.isoformat(),
+            "started": self.started.isoformat() if self.started else None,
+            "reached": {room: at.isoformat() for room, at in self.reached.items()},
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Calibration:
+        def parse(value: str | None) -> datetime | None:
+            return dt_util.parse_datetime(value) if value else None
+
+        return cls(
+            rooms=list(data["rooms"]),
+            target=float(data["target"]),
+            others=float(data["others"]),
+            hours=float(data["hours"]),
+            requested=parse(data["requested"]),
+            started=parse(data.get("started")),
+            reached={room: parse(at) for room, at in (data.get("reached") or {}).items()},
+        )
+
     def describe(self) -> dict[str, Any]:
         return {
             "raeume": self.rooms,
@@ -250,6 +277,10 @@ class HeatingController:
         self._learning_history = False  # Live-Messung pausiert (Historie wird gelesen)
         self._history_running = False
         self._unsub_bootstrap: Callable[[], None] | None = None
+        self._late_notified: dict[str, datetime] = {}  # Raum -> gemeldete Uhrzeit "warm um"
+        self._area_map: dict[tuple[str, str], list[str]] = {}  # (Bereich, Domain) -> Entitaeten, je Takt
+        self._duty_entity: str | None = None
+        self._duty_lookup_at: datetime | None = None
 
     # ------------------------------------------------------------ Lebenszyklus
 
@@ -262,6 +293,13 @@ class HeatingController:
             _LOGGER.warning("Gelernte Werte nicht lesbar, beginne neu: %s", err)
             self.learner = Learner()
         self._bootstrapped = bool(data.get("bootstrapped"))
+        if data.get("calibration"):
+            # Ein Kalibrierlauf ueberlebt einen Neustart; sonst blieben seine
+            # Sollwerte im Modus Manuell stehen.
+            try:
+                self.calibration = Calibration.from_dict(data["calibration"])
+            except (KeyError, TypeError, ValueError):
+                self.calibration = None
         self._unsub = async_track_time_interval(self.hass, self._async_tick, CONTROL_INTERVAL)
         if not self._bootstrapped:
             # Beim ersten Start aus der Historie lernen; bis dahin nicht live messen,
@@ -291,6 +329,7 @@ class HeatingController:
             "history": self.history,
             "learner": self.learner.to_dict(),
             "bootstrapped": self._bootstrapped,
+            "calibration": self.calibration.to_dict() if self.calibration else None,
         }
 
     def _save(self) -> None:
@@ -303,7 +342,9 @@ class HeatingController:
         return self.runtime.settings.get((room, key), default)
 
     def enabled(self, room: str | None) -> bool:
-        return bool(self.runtime.settings.get((room, "automatic"), 1.0))
+        # Ohne gespeicherten Schalterstand: global aus (nichts steuern, bis
+        # jemand einschaltet), je Raum an.
+        return bool(self.runtime.settings.get((room, "automatic"), 1.0 if room is not None else 0.0))
 
     def controlled(self, room: str) -> bool:
         return self.enabled(None) and self.enabled(room)
@@ -334,8 +375,8 @@ class HeatingController:
         for name in list(self.rooms):
             if room is not None and name != room:
                 continue
-            if self.calibration is not None and self.calibration.running:
-                continue  # der Kalibrierlauf behaelt alle Raeume bis zum Ende
+            if room is None and self.calibration is not None and self.calibration.running:
+                continue  # der Kalibrierlauf laeuft auch ohne Automatik weiter
             await self._release(name, "Automatik aus")
         self._force_plan = True
 
@@ -345,10 +386,12 @@ class HeatingController:
         if state.cycle is not None and not state.cycle.observed:
             self._close_cycle(dt_util.utcnow(), room, state, reason)
         climates, _ = self._climates(room)
-        if climates:
+        # Nur Gruppen im Modus Manuell umschalten: jeder Befehl kostet Funkkontingent.
+        manual = [c for c in climates if (current := self.hass.states.get(c)) is not None and current.state == "heat"]
+        if manual:
             try:
                 await self.hass.services.async_call(
-                    "climate", "set_hvac_mode", {"entity_id": climates, "hvac_mode": "auto"}, blocking=True
+                    "climate", "set_hvac_mode", {"entity_id": manual, "hvac_mode": "auto"}, blocking=True
                 )
             except Exception as err:  # noqa: BLE001
                 _LOGGER.warning("%s: Rueckgabe an das Homematic-Profil fehlgeschlagen: %s", room, err)
@@ -409,6 +452,7 @@ class HeatingController:
         )
         self._force_plan = True
         _LOGGER.info("Kalibrierlauf angefordert: %s", self.calibration.describe())
+        self._save()
         await self._async_tick(now)
 
     async def async_stop_calibration(self, reason: str = "abgebrochen") -> None:
@@ -417,6 +461,7 @@ class HeatingController:
             return
         self.calibration = None
         self._force_plan = True
+        self._save()
         self._notify(
             "calibration",
             f"Kalibrierlauf {reason}",
@@ -450,6 +495,7 @@ class HeatingController:
         if not calibration.running:
             if self.learner.quiet_for(now) >= CALIBRATION_REST:
                 calibration.started = now
+                self._save()
                 _LOGGER.info("Kalibrierlauf gestartet")
             elif now - calibration.requested > CALIBRATION_WAIT:
                 self.hass.async_create_task(self.async_stop_calibration("abgebrochen (keine Ruhephase)"))
@@ -458,6 +504,7 @@ class HeatingController:
             temp = infos.get(room, {}).get("temp")
             if room not in calibration.reached and temp is not None and temp >= calibration.target - REACHED_TOLERANCE:
                 calibration.reached[room] = now
+                self._save()
         if len(calibration.reached) == len(calibration.rooms):
             self.hass.async_create_task(self.async_stop_calibration("beendet"))
         elif now - calibration.started > timedelta(hours=calibration.hours):
@@ -473,19 +520,26 @@ class HeatingController:
         return self._area_entities(area.id, "climate"), area.id
 
     def _area_entities(self, area_id: str, domain: str) -> list[str]:
-        entities = er.async_get(self.hass)
+        if not self._area_map:
+            self._build_area_map()
+        return self._area_map.get((area_id, domain), [])
+
+    def _build_area_map(self) -> None:
+        """Einmal je Takt: Klima- und Sensor-Entitaeten nach Bereich (eigener oder des Geraets)."""
         devices = dr.async_get(self.hass)
-        result = []
-        for entry in entities.entities.values():
-            if entry.domain != domain or entry.disabled_by is not None:
+        result: dict[tuple[str, str], list[str]] = {}
+        for entry in er.async_get(self.hass).entities.values():
+            if entry.domain not in ("climate", "sensor") or entry.disabled_by is not None:
                 continue
-            entry_area = entry.area_id
-            if entry_area is None and entry.device_id:
+            area = entry.area_id
+            if area is None and entry.device_id:
                 device = devices.async_get(entry.device_id)
-                entry_area = device.area_id if device else None
-            if entry_area == area_id:
-                result.append(entry.entity_id)
-        return sorted(result)
+                area = device.area_id if device else None
+            if area is not None:
+                result.setdefault((area, entry.domain), []).append(entry.entity_id)
+        for value in result.values():
+            value.sort()
+        self._area_map = result
 
     def _valve_sensors(self, area_id: str | None) -> list[str]:
         """Ventilstellungen (%) der Heizkoerperthermostate im Bereich."""
@@ -575,16 +629,25 @@ class HeatingController:
     def _outside_function(self, fallback: float) -> Callable[[datetime], float]:
         """Aussentemperatur zu einem Zeitpunkt laut Prognose (sonst der aktuelle Wert)."""
         points = list(self._forecast)
+        times = [t for t, _ in points]
+        cache: dict[datetime, float] = {}  # die Planung fragt dieselben Zeitpunkte oft ab
 
         def at(moment: datetime) -> float:
-            if not points or moment < points[0][0] - timedelta(hours=1):
-                return fallback
-            if moment <= points[0][0]:
-                return points[0][1]
-            for (t1, v1), (t2, v2) in zip(points, points[1:]):
-                if t1 <= moment <= t2:
-                    return v1 + (v2 - v1) * ((moment - t1) / (t2 - t1))
-            return points[-1][1]
+            value = cache.get(moment)
+            if value is not None:
+                return value
+            if not points or moment < times[0] - timedelta(hours=1):
+                value = fallback
+            elif moment <= times[0]:
+                value = points[0][1]
+            elif moment >= times[-1]:
+                value = points[-1][1]
+            else:
+                index = bisect_right(times, moment)
+                (t1, v1), (t2, v2) = points[index - 1], points[index]
+                value = v1 + (v2 - v1) * ((moment - t1) / (t2 - t1))
+            cache[moment] = value
+            return value
 
         return at
 
@@ -654,6 +717,7 @@ class HeatingController:
         data = self.runtime.coordinator.data
         if data is None:
             return
+        self._area_map = {}  # Zuordnung zu Bereichen in diesem Takt neu lesen
         await self._refresh_forecast(now)
         await self._refresh_boiler(now)
         self._check_sources(now)
@@ -893,10 +957,14 @@ class HeatingController:
             state = self.rooms[room]
             comfort = info["comfort"]
             fixed = None
-            if self.calibration is not None:
-                fixed = self.calibration.target if room in calibration_rooms else self.calibration.others
+            calibration = self.calibration
+            # gleiche Reihenfolge wie in _desired
+            if calibration is not None and calibration.running and self.enabled(room):
+                fixed = calibration.target if room in calibration_rooms else calibration.others
             elif not self.controlled(room):
                 fixed = info["target_now"] if info["target_now"] is not None else setback
+            elif calibration is not None:
+                fixed = setback  # wartet auf die Ruhephase vor dem Kalibrierlauf
             elif state.manual_until is not None and state.manual_until > now:
                 fixed = info["target_now"]
             # Laeuft das Aufheizen schon, wird es nicht wieder verschoben. Ist
@@ -905,6 +973,8 @@ class HeatingController:
             committed = None
             if fixed is None and info["current"] is None and info["upcoming"] is not None:
                 committed = {"aufheizen": "main", "halten": "warm", "Vorstufe": "pre"}.get(state.mode or "")
+                if state.mode is None:
+                    committed = self._committed_after_restart(info, comfort, setback)
             inputs.append(
                 RoomInput(
                     name=room,
@@ -914,13 +984,32 @@ class HeatingController:
                     setback=setback,
                     priority=int(self.setting(room, "priority")),
                     safety=self.learner.safety(room),
-                    events=[(e.start, e.end) for e in info["events"] if e.start > now],
+                    events=[(e.start, e.end) for e in info["events"]],
                     fixed=fixed,
                     committed=committed,
                     valve=info["valve"],
                 )
             )
         return inputs
+
+    def _committed_after_restart(self, info: dict[str, Any], comfort: float, setback: float) -> str | None:
+        """Nach einem Neustart: stehen die Gruppen noch auf unserem Sollwert (Modus Manuell)?
+
+        Dann laeuft das Aufheizen schon und wird nicht verschoben. Im Automodus
+        stammen die Sollwerte vom Homematic-Profil und zaehlen nicht.
+        """
+        target = info["target_now"]
+        manual = all(
+            (state := self.hass.states.get(c)) is not None and state.state == "heat" for c in info["climates"]
+        )
+        if target is None or not manual:
+            return None
+        if target >= comfort - SETPOINT_TOLERANCE:
+            warm = info["temp"] is not None and info["temp"] >= comfort - REACHED_TOLERANCE
+            return "warm" if warm else "main"
+        if target > setback + SETPOINT_TOLERANCE:
+            return "pre"
+        return None
 
     async def _update_plan(
         self, now: datetime, infos: dict[str, dict[str, Any]], setback: float, outside: float | None
@@ -958,14 +1047,19 @@ class HeatingController:
         self._force_plan = False
         for room, plan in self.plan.plans.items():
             if plan.late and self.controlled(room) and self.calibration is None:
-                self._notify(
-                    f"plan_{room}",
-                    f"{room} wird voraussichtlich nicht rechtzeitig warm",
-                    f"Laut Plan ist {room} erst um {self._clock(plan.reach)} warm "
-                    f"(Frist {self._clock(plan.deadline)}). Vorrang anderer Räume oder "
-                    "die Außentemperatur lassen nicht mehr zu.",
-                )
-            else:
+                # Nur neu melden, wenn sich die erwartete Zeit um mehr als 15 min aendert
+                previous = self._late_notified.get(room)
+                reach = plan.reach or plan.deadline + timedelta(days=1)
+                if previous is None or abs(reach - previous) > timedelta(minutes=15):
+                    self._late_notified[room] = reach
+                    self._notify(
+                        f"plan_{room}",
+                        f"{room} wird voraussichtlich nicht rechtzeitig warm",
+                        f"Laut Plan ist {room} erst um {self._clock(plan.reach)} warm "
+                        f"(Frist {self._clock(plan.deadline)}). Vorrang anderer Räume oder "
+                        "die Außentemperatur lassen nicht mehr zu.",
+                    )
+            elif self._late_notified.pop(room, None) is not None:
                 self._dismiss(f"plan_{room}")
 
     @staticmethod
@@ -986,7 +1080,7 @@ class HeatingController:
         if not info["climates"]:
             return "kein Thermostat", None
         calibration = self.calibration
-        if calibration is not None and calibration.running:
+        if calibration is not None and calibration.running and self.enabled(room):
             if room in calibration.rooms:
                 return "Kalibrierung", calibration.target
             return "Kalibrierung (andere Räume)", calibration.others
@@ -1051,6 +1145,7 @@ class HeatingController:
         duty: float | None,
     ) -> None:
         """Sollwert senden, wenn noetig. Erkennt Handverstellungen."""
+        desired = round(desired * 2) / 2  # Homematic kennt nur halbe Grad
         current = info["target_now"]
         if current is None:
             return
@@ -1104,10 +1199,18 @@ class HeatingController:
     def _duty_cycle(self) -> float | None:
         entity_id = self.entry.options.get(CONF_DUTY_CYCLE_SENSOR)
         if not entity_id:
-            for entry in er.async_get(self.hass).entities.values():
-                if entry.platform == "homematicip_cloud" and "duty_cycle" in entry.entity_id:
-                    entity_id = entry.entity_id
-                    break
+            # Suche im Register hoechstens stuendlich
+            now = dt_util.utcnow()
+            if self._duty_lookup_at is None or now - self._duty_lookup_at >= timedelta(hours=1):
+                self._duty_lookup_at = now
+                self._duty_entity = next(
+                    (
+                        e.entity_id for e in er.async_get(self.hass).entities.values()
+                        if e.platform == "homematicip_cloud" and "duty_cycle" in e.entity_id
+                    ),
+                    None,
+                )
+            entity_id = self._duty_entity
         value = _float(self.hass, entity_id)
         if value is not None and value >= DUTY_CYCLE_ALERT:
             self._notify(

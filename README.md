@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.3.1. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.3.2. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -84,6 +84,15 @@ Nextcloud direkt ab.
   Steuerung die gesteuerten Heizgruppen auf „Manuell“; das Homematic-Profil
   greift dann nicht ein. Fällt Home Assistant aus, bleibt der letzte
   Sollwert stehen.
+- **Neustart von Home Assistant:** Ein laufender Kalibrierlauf geht weiter.
+  Steht eine Heizgruppe noch auf „Manuell“ mit Komfort-Sollwert, gilt das
+  Aufheizen als begonnen und wird nicht verschoben. Der globale Schalter
+  „Automatik“ ist bei einer neuen Einrichtung aus und schaltet sich auch
+  nach einem holprigen Neustart nicht von selbst ein.
+- **Kalender nicht erreichbar:** Fällt ein einzelner Kalender aus, gelten
+  für ihn die zuletzt gelesenen Termine weiter. Nur wenn kein Kalender
+  lesbar ist oder die Anmeldung abgelehnt wird, meldet die Integration einen
+  Fehler.
 
 ## Voraussetzungen in Homematic IP
 
@@ -140,12 +149,12 @@ Je Raum ein Gerät:
 | Komforttemperatur | Zieltemperatur während Terminen (Standard 21 °C) |
 | Vorheizzeit Startwert | Wie lange der Raum allein von 14 auf 21 °C braucht, bei 0 °C außen; gilt, bis gemessen wurde (Standard 120 min) |
 | Vorrang | 1 = höchster; entscheidet, wenn die Zeit nicht für alle reicht |
-| Automatik | Aus: Thermostate dieses Raums werden nicht gesteuert |
+| Automatik | Aus: Thermostate dieses Raums werden nicht gesteuert (auch nicht vom Kalibrierlauf) |
 
 Dazu ein Gerät „Heizungssteuerung“ mit Status (Attribut `plan`),
 Pufferreserve, Pufferkapazität, Kessel-Dauerleistung, Kessel-Anlaufzeit,
 Kalibrierung (letzte Auswertung als Attribut), Absenktemperatur (14 °C) und
-dem globalen Schalter „Automatik“. In den Optionen der Integration lassen
+dem globalen Schalter „Automatik“ (bei neuer Einrichtung aus). In den Optionen der Integration lassen
 sich Wetter-Entität, Vorlauf-Sensor, Außentemperatur-Sensor,
 Duty-Cycle-Sensor und StokerCloud-Anlagenname wählen.
 

@@ -14,7 +14,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .caldav import NextcloudClient, NextcloudError, RoomEvent
+from .caldav import NextcloudAuthError, NextcloudClient, NextcloudError, RoomEvent
 from .const import CONF_CALENDARS, DAYS_AHEAD, DAYS_BACK, DOMAIN, UPDATE_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
@@ -54,19 +54,38 @@ class RoomCoordinator(DataUpdateCoordinator[RoomData]):
         )
         self._calendars: list[dict[str, str]] = entry.data[CONF_CALENDARS]
         self._known_rooms: list[str] = []
+        # Letzter erfolgreicher Abruf je Kalender: faellt einer kurz aus,
+        # gelten fuer ihn die zuletzt gelesenen Termine weiter.
+        self._last: dict[str, list[RoomEvent]] = {}
+        self._failing: set[str] = set()
 
     async def _async_update_data(self) -> RoomData:
         now = dt_util.utcnow()
         start = now - timedelta(days=DAYS_BACK)
         end = now + timedelta(days=DAYS_AHEAD)
         events: list[RoomEvent] = []
-        try:
-            for calendar in self._calendars:
-                events += await self._client.async_get_events(
-                    calendar["url"], start, end, calendar.get("name", "")
-                )
-        except NextcloudError as err:
-            raise UpdateFailed(str(err)) from err
+        for calendar in self._calendars:
+            url, name = calendar["url"], calendar.get("name", "")
+            try:
+                fetched = await self._client.async_get_events(url, start, end, name)
+            except NextcloudAuthError as err:
+                raise UpdateFailed(str(err)) from err
+            except NextcloudError as err:
+                if url not in self._last:
+                    # Noch nie gelesen: lieber gar nichts als eine Belegung ohne diesen Kalender
+                    raise UpdateFailed(f"{name or url}: {err}") from err
+                if url not in self._failing:
+                    self._failing.add(url)
+                    _LOGGER.warning("Kalender %s nicht lesbar, nutze den letzten Stand: %s", name or url, err)
+                fetched = self._last[url]
+            else:
+                self._last[url] = fetched
+                if url in self._failing:
+                    self._failing.discard(url)
+                    _LOGGER.info("Kalender %s wieder lesbar", name or url)
+            events += fetched
+        if self._failing and len(self._failing) == len(self._calendars):
+            raise UpdateFailed("Kein Kalender lesbar")
 
         # Raumliste nur ergaenzen, nie kuerzen: einmal angelegte Sensoren bleiben.
         for room in await self._client.async_get_room_names():

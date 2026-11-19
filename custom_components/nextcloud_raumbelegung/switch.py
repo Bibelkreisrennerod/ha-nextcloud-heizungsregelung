@@ -6,7 +6,7 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_OFF
+from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -38,13 +38,17 @@ class AutomaticSwitch(SwitchEntity, RestoreEntity):
         self._attr_translation_key = "automatic" if room is not None else "global_automatic"
         self._attr_unique_id = room_unique_id(entry, room, "automatic")
         self._attr_device_info = room_device_info(entry, room)
-        self._attr_is_on = True
+        # Neu: je Raum an, global aus. So steuert eine frisch eingerichtete
+        # Integration nichts, bis jemand die Automatik einschaltet.
+        self._attr_is_on = room is not None
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         last = await self.async_get_last_state()
-        if last is not None:
-            self._attr_is_on = last.state != STATE_OFF
+        # "unavailable" oder "unknown" zaehlen nicht, sonst schaltet sich die
+        # globale Automatik nach einem holprigen Neustart von selbst ein.
+        if last is not None and last.state in (STATE_ON, STATE_OFF):
+            self._attr_is_on = last.state == STATE_ON
         self._publish()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
