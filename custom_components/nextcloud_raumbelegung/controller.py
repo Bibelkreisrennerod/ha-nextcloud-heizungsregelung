@@ -180,6 +180,9 @@ class RoomState:
     manual_until: datetime | None = None
     desired: float | None = None  # zuletzt gewuenschter Sollwert
     mode: str | None = None  # zuletzt bestimmte Betriebsart
+    # Seit dem Start schon einen gueltigen Sollwert gelesen? Nach einem Neustart
+    # kann Homematic IP noch einige Minuten "nicht verfuegbar" melden.
+    seen: bool = False
     cycle: Cycle | None = None
     status: dict[str, Any] = field(default_factory=dict)
 
@@ -775,6 +778,8 @@ class HeatingController:
             else:
                 self._track_cycle(now, room, state, info, desired, outside)
             state.status = self._room_status(room, state, info, desired)
+            if info["target_now"] is not None and info["temp"] is not None:
+                state.seen = True
 
         self._first_tick = False
         self.status = self._global_status(now, outside, flow, duty)
@@ -973,7 +978,7 @@ class HeatingController:
             committed = None
             if fixed is None and info["current"] is None and info["upcoming"] is not None:
                 committed = {"aufheizen": "main", "halten": "warm", "Vorstufe": "pre"}.get(state.mode or "")
-                if state.mode is None:
+                if not state.seen:
                     committed = self._committed_after_restart(info, comfort, setback)
             inputs.append(
                 RoomInput(
@@ -995,7 +1000,9 @@ class HeatingController:
     def _committed_after_restart(self, info: dict[str, Any], comfort: float, setback: float) -> str | None:
         """Nach einem Neustart: stehen die Gruppen noch auf unserem Sollwert (Modus Manuell)?
 
-        Dann laeuft das Aufheizen schon und wird nicht verschoben. Im Automodus
+        Die Steuerung sendet nur wenige Sollwerte: Komfort (Aufheizen, Halten),
+        Komfort minus 3 K (Vorstufe), Absenkung und Absenkung minus 2 K (wartend).
+        Daraus laesst sich ablesen, was vor dem Neustart lief. Im Automodus
         stammen die Sollwerte vom Homematic-Profil und zaehlen nicht.
         """
         target = info["target_now"]
@@ -1162,7 +1169,9 @@ class HeatingController:
             and abs(current - state.before_command) < SETPOINT_TOLERANCE
         )
         calibrating = self.calibration is not None and self.calibration.running
-        if not ours and not profile_reset and not not_arrived and not self._first_tick and not calibrating:
+        # Erster gueltiger Wert seit dem Start oder dem Wiedereinschalten: keine Handverstellung
+        fresh = self._first_tick or not state.seen
+        if not ours and not profile_reset and not not_arrived and not fresh and not calibrating:
             # Jemand hat am Thermostat oder in der App verstellt.
             event = info["current"] or (info["upcoming"] if info.get("mode") in ("aufheizen", "halten", "Vorstufe") else None)
             state.manual_until = event.end if event is not None else now + MANUAL_HOLD_OUTSIDE_EVENT
@@ -1268,7 +1277,7 @@ class HeatingController:
                     target=comfort,
                     predicted_minutes=predicted,
                     lead_minutes=(deadline - start).total_seconds() / 60,
-                    counts=not self._first_tick and state.manual_until is None,
+                    counts=not self._first_tick and state.seen and state.manual_until is None,
                 )
             cycle = state.cycle
         if cycle is None or temp is None:

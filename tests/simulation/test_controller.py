@@ -27,9 +27,12 @@ hass=Hass()
 temps={r:14.0 for r in ROOMS}; state=P.PlantState(TPLANT.e_buf); SHARE=[1.0]
 for r,(aid,_,_) in ROOMS.items(): hass.setpoints[f"climate.{aid}"]=14.0
 def outside_at(t): return hass.base+4*math.sin((t.hour+t.minute/60-9)/24*2*math.pi)
+UNAVAILABLE=set()  # Klima-Entitaeten, die gerade "unavailable" melden (z. B. nach Neustart)
 def publish():
     for r,(aid,n,_) in ROOMS.items():
         e=f"climate.{aid}"
+        if e in UNAVAILABLE:
+            hass.states[e]=State("unavailable",{}); continue
         hass.states[e]=State(hass.modes.get(e,"auto"),{"current_temperature":round(temps[r],1),"temperature":hass.setpoints[e]})
         v=P.valve(hass.setpoints[e],temps[r])
         for i in range(n): hass.states[f"sensor.{aid}_heizkorper_{i}_heizen"]=State(str(round(v*100)),{"unit_of_measurement":"%"})
@@ -138,10 +141,19 @@ async def main(mode):
         await c.async_stop()
         c=ctl.HeatingController(hass,Entry(),rt); await c.async_start()
         since=stubs.NOW[0]
+        # Homematic IP meldet die ersten 3 Minuten nach dem Neustart "nicht verfuegbar"
+        UNAVAILABLE.update(f"climate.{aid}" for aid,_,_ in ROOMS.values())
+        await minutes(3)
+        UNAVAILABLE.clear()
         await minutes(1)
-        print("Saal vor/nach Neustart:",before,c.rooms["Saal"].mode,"zugesagt:",c._inputs["Saal"].committed if "Saal" in c._inputs else None)
+        print("Saal vor/nach Neustart:",before,c.rooms["Saal"].mode,"zugesagt:",c._inputs["Saal"].committed if "Saal" in c._inputs else None,"Handverstellung:",c.rooms["Saal"].manual_until)
         await minutes(30)
         print("Befehle nach Neustart:",[x for x in cmds(since) if x[1]=="saal"])
+        # 3) Welche Zusage folgt aus welchem Sollwert (Komfort 21, Absenkung 14)?
+        def guess(target,temp,mode="heat"):
+            hass.states["climate.saal"]=State(mode,{"current_temperature":temp,"temperature":target})
+            return c._committed_after_restart({"climates":["climate.saal"],"target_now":target,"temp":temp},21.0,14.0)
+        print("Zusage aus Sollwert:",{"21/17":guess(21,17),"21/20.8":guess(21,20.8),"18 Vorstufe":guess(18,16),"14":guess(14,14),"12 wartend":guess(12,13),"21 Profil":guess(21,17,"auto")})
         return
     # Automatik an: Sonntag Gottesdienst
     day=datetime(2026,11,22,0,0,tzinfo=timezone.utc)

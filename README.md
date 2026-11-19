@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.3.2. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.3.3. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -85,8 +85,11 @@ Nextcloud direkt ab.
   greift dann nicht ein. Fällt Home Assistant aus, bleibt der letzte
   Sollwert stehen.
 - **Neustart von Home Assistant:** Ein laufender Kalibrierlauf geht weiter.
-  Steht eine Heizgruppe noch auf „Manuell“ mit Komfort-Sollwert, gilt das
-  Aufheizen als begonnen und wird nicht verschoben. Der globale Schalter
+  Steht eine Heizgruppe noch auf „Manuell“, liest die Steuerung am Sollwert
+  ab, was vorher lief: Komfort = Aufheizen oder Halten, zwischen Absenkung
+  und Komfort = Vorstufe. Das wird dann nicht verschoben. Melden die
+  Thermostate nach dem Neustart noch „nicht verfügbar“, wartet die Steuerung
+  auf den ersten gültigen Wert; der zählt nicht als Handverstellung. Der globale Schalter
   „Automatik“ ist bei einer neuen Einrichtung aus und schaltet sich auch
   nach einem holprigen Neustart nicht von selbst ein.
 - **Kalender nicht erreichbar:** Fällt ein einzelner Kalender aus, gelten
