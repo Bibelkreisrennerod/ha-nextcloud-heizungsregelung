@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from functools import partial
 import logging
+import math
 from typing import Any, Callable
 
 from homeassistant.components import persistent_notification
@@ -279,6 +280,8 @@ class HeatingController:
         self._bootstrapped = False  # schon einmal aus der Historie gelernt
         self._learning_history = False  # Live-Messung pausiert (Historie wird gelesen)
         self._history_running = False
+        self._fit_running = False
+        self._fit_tried_at: datetime | None = None  # letzter Versuch (nach Fehlschlag nicht jede 5 min)
         self._unsub_bootstrap: Callable[[], None] | None = None
         self._late_notified: dict[str, datetime] = {}  # Raum -> gemeldete Uhrzeit "warm um"
         self._area_map: dict[tuple[str, str], list[str]] = {}  # (Bereich, Domain) -> Entitaeten, je Takt
@@ -836,7 +839,41 @@ class HeatingController:
             self._force_plan = True  # neue Parameter
             fit = self.learner.plant.last_fit or {}
             _LOGGER.info("Heizphase ausgewertet: %s", fit)
+        retry = self._fit_tried_at is None or now - self._fit_tried_at >= timedelta(hours=1)
+        if self.learner.fit_due(now) and not self._fit_running and retry:
+            self.hass.async_create_task(self._async_fit(now, outside))
         self._save()
+
+    async def _async_fit(self, now: datetime, outside: float | None) -> None:
+        """Gemeinsame Anpassung im Hintergrund rechnen und uebernehmen."""
+        if self._fit_running:
+            return
+        self._fit_running = True
+        self._fit_tried_at = now
+        learner = self.learner
+        try:
+            plant = PlantParams(p_max_kw=self._boiler_nominal_kw())
+            prior = {room: self.setting(room, "preheat") for room in learner.rooms}
+            data = learner.prepare_fit(now, plant, prior)
+            # Testlaeufe fuer die kaelteste Stunde der naechsten 24 h bewerten
+            ahead = [v for t, v in self._forecast if now <= t <= now + timedelta(hours=24)]
+            cold = min(ahead) if ahead else outside
+            state = await self.hass.async_add_executor_job(learner.run_fit, data, now, plant, cold)
+            if state is None or learner is not self.learner:
+                return
+            learner.apply_fit(state)
+            self._force_plan = True
+            self._save()
+            _LOGGER.info(
+                "Gemeinsame Anpassung: %s Messpunkte, Fehler %.2f K, empfohlener Testlauf %s",
+                state["rows"],
+                state["rms"],
+                (state["experiments"] or [{}])[0].get("label"),
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Gemeinsame Anpassung fehlgeschlagen")
+        finally:
+            self._fit_running = False
 
     # ------------------------------------------------- Lernen aus der Historie
 
@@ -935,6 +972,9 @@ class HeatingController:
             self._sample_at = None
             self._bootstrapped = True
             self._force_plan = True
+            if result.samples:
+                # alle Werte gemeinsam an die gelesene Historie anpassen
+                await self._async_fit(end, None)
             self._save()
             cool = sum(s.cool_windows for s in fresh.rooms.values())
             heat = fresh.plant.episodes
@@ -1404,6 +1444,7 @@ class HeatingController:
             "b": params.b,
             "w": params.w,
             "d": params.d,
+            "sigma": self.learner.sigma(room),
             "curve": params.curve,
             "curve_points": self.learner.curve_points(room),
             "dead_events": stats.dead_events,
@@ -1420,6 +1461,39 @@ class HeatingController:
             "learned_cycles": stats.cycles,
             "manual_until": state.manual_until,
             "history": self.history.get(room, []),
+        }
+
+    def _fit_summary(self) -> dict[str, Any] | None:
+        fit = self.learner.fit_state
+        if not fit:
+            return None
+        sigma = fit.get("sigma") or {}
+
+        def percent(key: str) -> int | None:
+            value = sigma.get(key)
+            return None if value is None else round(100 * (math.exp(value) - 1))
+
+        rooms = {}
+        for room, error in (fit.get("rms_rooms") or {}).items():
+            d = sigma.get(f"{room}|d")
+            rooms[room] = {
+                "fehler_k": error,
+                "auskuehlrate_prozent": percent(f"{room}|a"),
+                "aufheizrate_prozent": percent(f"{room}|b"),
+                "totzeit_min": None if d is None else round(d * 60),
+                "leistungsbedarf_prozent": percent(f"{room}|w"),
+                "aufheizdauer_prozent": round(100 * (fit.get("duration_sigma") or {}).get(room, 0.0)),
+            }
+        return {
+            "rms": fit.get("rms"),
+            "zeitpunkt": _local(datetime.fromtimestamp(fit["time"], tz=dt_util.UTC)) if fit.get("time") else None,
+            "rows": fit.get("rows"),
+            "residuals": fit.get("residuals"),
+            "iterations": fit.get("iterations"),
+            "e_buf_spread": percent("|e_buf"),
+            "rooms": rooms,
+            "experiments": fit.get("experiments"),
+            "outside": fit.get("outside"),
         }
 
     def _global_status(self, now: datetime, outside: float | None, flow: float | None, duty: float | None) -> dict[str, Any]:
@@ -1463,6 +1537,8 @@ class HeatingController:
             "auswertungen": self.learner.plant.episodes,
             "letzte_auswertung": self.learner.plant.last_fit,
             "kalibrierung": None if self.calibration is None else self.calibration.describe(),
+            "fit": self._fit_summary(),
+            "rows_pending": self.learner.rows_pending,
             "historie_gelernt": self._bootstrapped,
             "lernt_aus_historie": self._learning_history,
             "kalibrierung_status": "aus"

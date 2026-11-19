@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.3.4. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.4.0. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -61,11 +61,29 @@ Nextcloud direkt ab.
   (meist die letzten 10 Tage) und lernt daraus, statt bei null anzufangen.
   Der Dienst `nextcloud_raumbelegung.aus_historie_lernen` wiederholt das und
   verwirft dabei die bisher gelernten Werte.
+- **Gemeinsame Anpassung (ab 0.4):** Einmal am Tag, in einer Ruhephase,
+  passt die Integration alle Werte gemeinsam an die neuen Messpunkte an:
+  Auskühlrate, Aufheizrate, Totzeit und Leistungsbedarf je Raum sowie die
+  Pufferreserve. Gesucht werden die Werte, mit denen das Modell die
+  gemessenen Verläufe 30, 60 und 120 Minuten voraus am besten nachrechnet
+  (Systemidentifikation mit Grey-Box-Modell, Levenberg-Marquardt). Das
+  Ergebnis der letzten Anpassung geht als Vorwissen ein und verliert je Tag
+  an Gewicht (Halbwertszeit etwa 12 Tage); feste Werte gibt es nicht, nur
+  Startwerte, die Messungen überstimmen. Aus der Krümmung der Fehlerfläche
+  (Fisher-Information) folgt die Unsicherheit jedes Werts; sie steht als
+  Attribut an den Sensoren und bestimmt den Sicherheitszuschlag
+  (95 % der Aufheizdauern). Die Rechnung läuft im Hintergrund und dauert
+  für einen Tag unter einer Sekunde.
+- **Empfohlener Testlauf:** Nach jeder Anpassung rechnet die Integration
+  für mögliche Kalibrierläufe (jeder Raum allein, der größte Raum mit jedem
+  anderen, alle außer dem größten, alle zusammen) aus, wie stark sie die
+  Unsicherheit verkleinern würden, bei der kältesten Außentemperatur der
+  nächsten 24 Stunden. Der beste steht im Sensor „Empfohlener Testlauf“.
 - **Kalibriert:** Alle 30 Minuten rechnet die Steuerung die letzten
   2 Stunden je Raum nach und vergleicht mit der Messung. Liegt der mittlere
   Fehler unter 0,5 K (nach mindestens 12 Stunden ohne und 4 Stunden mit
-  Heizen), gilt das Modell des Raums als kalibriert. Bis dahin plant sie mit
-  mindestens 25 % Sicherheitszuschlag.
+  Heizen), gilt das Modell des Raums als kalibriert. Bis zur ersten
+  gemeinsamen Anpassung plant sie mit mindestens 25 % Sicherheitszuschlag.
 - **Kalibrierlauf:** Der Dienst `nextcloud_raumbelegung.kalibrierlauf` heizt
   an einem freien Tag einen oder mehrere Räume unter idealen Bedingungen auf
   (Puffer voll, andere Räume tiefer abgesenkt). Zwei Läufe reichen für den
@@ -166,7 +184,9 @@ Je Raum ein Gerät:
 
 Dazu ein Gerät „Heizungssteuerung“ mit Status (Attribut `plan`),
 Pufferreserve, Pufferkapazität, Kessel-Dauerleistung, Kessel-Anlaufzeit,
-Kalibrierung (letzte Auswertung als Attribut), Absenktemperatur (14 °C) und
+Kalibrierung (letzte Auswertung als Attribut), Modellanpassung (mittlerer
+Vorhersagefehler, Unsicherheiten je Raum), Empfohlener Testlauf,
+Absenktemperatur (14 °C) und
 dem globalen Schalter „Automatik“ (bei neuer Einrichtung aus). In den Optionen der Integration lassen
 sich Wetter-Entität, Vorlauf-Sensor, Außentemperatur-Sensor,
 Duty-Cycle-Sensor und StokerCloud-Anlagenname wählen.

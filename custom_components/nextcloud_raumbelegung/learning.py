@@ -43,10 +43,13 @@ zwei Wochen). Unplausible Werte werden verworfen.
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 import math
+import threading
 from typing import Any
+
+from . import estimation
 
 from .physics import (
     CURVE_DEV,
@@ -58,6 +61,7 @@ from .physics import (
     b_for_minutes,
     plant_step,
     room_step,
+    solo_minutes,
 )
 
 SAMPLE = timedelta(minutes=5)
@@ -100,6 +104,11 @@ FLOW_ROOM = 20.0  # Bezug fuer die Heizkoerperleistung (Grad)
 FLOW_MIN_SPAN = 15.0  # Vorlauf bei vollem Puffer muss so weit ueber FLOW_ROOM liegen
 FLOW_WEIGHT = 2.0  # Gewicht des Vorlaufs gegenueber den Raumtemperaturen
 FLOW_DECAY = 0.02  # K je Messpunkt (~6 K am Tag): so schnell vergisst der Bezug "Puffer voll"
+FIT_MIN_ROWS = 72  # gemeinsame Anpassung ab 6 h neuer Messpunkte
+FIT_EVERY = timedelta(hours=20)
+FIT_QUIET = timedelta(hours=2)  # nur in Ruhe, damit keine Heizphase zerschnitten wird
+ROWS_MAX = 10 * 288  # hoechstens 10 Tage Messpunkte bis zur naechsten Anpassung
+Z_95 = 1.65  # einseitiges 95-%-Quantil der Normalverteilung
 
 
 def flow_share(flow: float | None, flow_full: float | None) -> float | None:
@@ -222,15 +231,23 @@ class Learner:
         self._episode: dict[str, Any] | None = None
         self._last_episode_end: datetime | None = None
         self._flow_full: float | None = data.get("flow_full")
+        # Messpunkte seit der letzten gemeinsamen Anpassung und deren Ergebnis
+        self._rows: list[dict[str, Any]] = list(data.get("rows") or [])
+        self.fit_state: dict[str, Any] | None = data.get("fit")
+        self._rows_lock = threading.Lock()
         self._quiet_since: datetime | None = None  # seit wann kein Raum aufheizt (Ventile < VALVE_OPEN)
         # Sollwert, seit wann, ob es ein Aufheizvorgang ist, wann der Sollwert erreicht war
         self._setpoint: dict[str, tuple[float, datetime, bool, datetime | None]] = {}
 
     def to_dict(self) -> dict:
+        with self._rows_lock:
+            rows = list(self._rows)
         return {
             "rooms": {name: stats.to_dict() for name, stats in self.rooms.items()},
             "plant": self.plant.to_dict(),
             "flow_full": self._flow_full,
+            "rows": rows,
+            "fit": self.fit_state,
         }
 
     # ------------------------------------------------------------ Parameter
@@ -239,6 +256,22 @@ class Learner:
         return self.rooms.setdefault(room, RoomStats())
 
     def room_params(self, room: str, prior_minutes: float) -> RoomParams:
+        fitted = self._fitted(room)
+        if fitted is not None:
+            return replace(fitted, curve=self.curve(room))
+        return self._single_params(room, prior_minutes)
+
+    def _fitted(self, room: str) -> RoomParams | None:
+        """Werte aus der gemeinsamen Anpassung, falls der Raum dabei war."""
+        values = (self.fit_state or {}).get("values") or {}
+        keys = [f"{room}|{k}" for k in ("a", "b", "d", "w")]
+        if not all(k in values for k in keys):
+            return None
+        a, b, d, w = (values[k] for k in keys)
+        return RoomParams(a=a, b=b, w=w, d=d)
+
+    def _single_params(self, room: str, prior_minutes: float) -> RoomParams:
+        """Werte aus den Einzelschaetzungen (Fenster je Groesse); Vorwissen der ersten Anpassung."""
         stats = self.room_stats(room)
         a = (stats.sxy + LAMBDA_A * PRIOR_A) / (stats.sxx + LAMBDA_A)
         a = min(max(a, 0.005), 0.5)
@@ -284,6 +317,9 @@ class Learner:
 
     def plant_params(self, base: PlantParams) -> PlantParams:
         e_buf = (self.plant.e_sum + LAMBDA_E * base.e_buf) / (self.plant.e_w + LAMBDA_E)
+        fitted = ((self.fit_state or {}).get("values") or {}).get("|e_buf")
+        if fitted is not None:
+            e_buf = fitted
         t_start = (self.plant.t_sum + LAMBDA_T * base.t_start) / (self.plant.t_w + LAMBDA_T)
         return PlantParams(
             e_buf=min(max(e_buf, 0.05), 5.0),
@@ -292,17 +328,25 @@ class Learner:
         )
 
     def safety(self, room: str) -> float:
-        """Sicherheitsfaktor: 95-%-Quantil von tatsaechlich/vorhergesagt.
+        """Sicherheitsfaktor auf die Aufheizdauer.
 
-        Solange das Modell des Raums nicht kalibriert ist, mindestens 1,25.
+        Mit gemeinsamer Anpassung: das Groessere aus der Unsicherheit der
+        Aufheizdauer (95 %, aus der Kovarianz von a, b, d) und dem
+        95-%-Quantil von tatsaechlich/vorhergesagt der Heizvorgaenge.
+        Vor der ersten Anpassung: das Quantil, solange das Modell nicht
+        kalibriert ist mindestens 1,25.
         """
         ratios = self.room_stats(room).ratios
-        if len(ratios) < 5:
-            value = SAFETY_UNCALIBRATED
-        else:
+        empirical = None
+        if len(ratios) >= 5:
             ordered = sorted(ratios)
             index = min(len(ordered) - 1, math.ceil(0.95 * len(ordered)) - 1)
-            value = min(max(ordered[index], 1.0), 2.0)
+            empirical = ordered[index]
+        spread = ((self.fit_state or {}).get("duration_sigma") or {}).get(room)
+        if spread is not None:
+            value = max(empirical or 1.0, 1.0 + Z_95 * spread)
+            return min(max(value, 1.0), 2.0)
+        value = SAFETY_UNCALIBRATED if empirical is None else min(max(empirical, 1.0), 2.0)
         if not self.calibrated(room):
             value = max(value, SAFETY_UNCALIBRATED)
         return value
@@ -406,9 +450,141 @@ class Learner:
             self._deadtime(name, stats, window, params, outside)
             gains[name] = self._gain(window, params, self._open_since.get(name))
         self._track_count += 1
+        self._store_row(now, rooms, outside, flow)
         self._episode_step(
             now, rooms, gains, buffer_fraction, boiler_kw, plant, prior_minutes, calibration, flow, tops
         )
+
+    # ------------------------------------------------- gemeinsame Anpassung
+
+    def _store_row(
+        self, now: datetime, rooms: dict[str, RoomSample], outside: float | None, flow: float | None
+    ) -> None:
+        row = {
+            "t": now.timestamp(),
+            "o": None if outside is None else round(outside, 1),
+            "f": None if flow is None else round(flow, 1),
+            "r": {
+                name: [
+                    round(s.temp, 2),
+                    None if s.valve is None or not s.measured else round(s.valve, 3),
+                    None if s.setpoint is None else round(s.setpoint, 1),
+                ]
+                for name, s in rooms.items()
+                if s.temp is not None
+            },
+        }
+        with self._rows_lock:
+            self._rows.append(row)
+            del self._rows[:-ROWS_MAX]
+
+    def sigma(self, room: str) -> dict[str, float] | None:
+        """Unsicherheit der angepassten Werte eines Raums (log bzw. Stunden bei d)."""
+        values = (self.fit_state or {}).get("sigma") or {}
+        result = {k: values[f"{room}|{k}"] for k in ("a", "b", "d", "w") if f"{room}|{k}" in values}
+        return result or None
+
+    @property
+    def rows_pending(self) -> int:
+        return len(self._rows)
+
+    def fit_due(self, now: datetime) -> bool:
+        """Ist eine gemeinsame Anpassung faellig (genug neue Messpunkte, Ruhe)?"""
+        if len(self._rows) < FIT_MIN_ROWS or self._episode is not None:
+            return False
+        if self.quiet_for(now) < FIT_QUIET:
+            return False
+        last = (self.fit_state or {}).get("time")
+        return last is None or now.timestamp() - last >= FIT_EVERY.total_seconds()
+
+    def prepare_fit(self, now: datetime, plant_base: PlantParams, prior_minutes: dict[str, float]) -> estimation.FitInput:
+        """Momentaufnahme fuer die Anpassung (kann dann im Hintergrund laufen)."""
+        with self._rows_lock:
+            rows = list(self._rows)
+        names = sorted({room for row in rows for room in row["r"]})
+        prior_mean: dict[estimation.Name, float] = {}
+        for room in names:
+            params = self.room_params(room, prior_minutes.get(room, 120.0))
+            for key in ("a", "b", "d", "w"):
+                prior_mean[(room, key)] = getattr(params, key)
+        prior_mean[(None, "e_buf")] = self.plant_params(plant_base).e_buf
+        prior_info = None
+        if self.fit_state and self.fit_state.get("info"):
+            days = (now.timestamp() - self.fit_state["time"]) / 86400
+            prior_info = estimation.forget(_info_from_json(self.fit_state["info"]), days)
+        return estimation.FitInput(
+            rows=rows,
+            prior_mean=prior_mean,
+            prior_info=prior_info,
+            t_start=self.plant_params(plant_base).t_start,
+            flow_full=self._flow_full,
+            flow_room=FLOW_ROOM,
+            flow_min_span=FLOW_MIN_SPAN,
+        )
+
+    def run_fit(
+        self, data: estimation.FitInput, now: datetime, plant_base: PlantParams, outside: float | None
+    ) -> dict[str, Any] | None:
+        """Anpassung rechnen (ohne den Learner zu veraendern); Ergebnis fuer apply_fit."""
+        result = estimation.fit(data)
+        if result is None:
+            return None
+        curves = {room: self.curve(room) for room, _ in result.names if room is not None}
+        plant = PlantParams(e_buf=result.values[(None, "e_buf")], t_start=data.t_start)
+        spread = {}
+        for room in curves:
+            params = RoomParams(
+                a=result.values[(room, "a")],
+                b=result.values[(room, "b")],
+                w=result.values[(room, "w")],
+                d=result.values[(room, "d")],
+                curve=curves[room],
+            )
+            spread[room] = round(
+                estimation.duration_uncertainty(
+                    result, room, params, plant, lambda p: solo_minutes(p, plant, limit=12 * 60)
+                ),
+                3,
+            )
+        fitted_rooms = {
+            room: RoomParams(
+                a=result.values[(room, "a")],
+                b=result.values[(room, "b")],
+                w=result.values[(room, "w")],
+                d=result.values[(room, "d")],
+                curve=curves[room],
+            )
+            for room in curves
+        }
+        experiments = estimation.rank_experiments(
+            result,
+            curves,
+            data.t_start,
+            estimation.candidates_for(fitted_rooms),
+            outside if outside is not None else 0.0,
+        )
+        return {
+            "time": now.timestamp(),
+            "values": {_key(name): round(value, 5) for name, value in result.values.items()},
+            "sigma": {_key(name): round(value, 4) for name, value in result.sigma.items()},
+            "info": _info_to_json(result.info),
+            "rms": round(result.rms, 3),
+            "rms_rooms": {room: round(v, 3) for room, v in result.rms_rooms.items()},
+            "residuals": result.residuals,
+            "iterations": result.iterations,
+            "rows": len(data.rows),
+            "start": result.start,
+            "end": result.end,
+            "duration_sigma": spread,
+            "outside": outside,
+            "experiments": experiments,
+        }
+
+    def apply_fit(self, state: dict[str, Any]) -> None:
+        """Ergebnis uebernehmen; die verwendeten Messpunkte sind damit verbraucht."""
+        self.fit_state = state
+        with self._rows_lock:
+            self._rows = [row for row in self._rows if row["t"] > state["end"]]
 
     def _curve_sample(self, name: str, stats: RoomStats, sample: RoomSample, now: datetime) -> None:
         """Ventilstellung zur Abweichung Soll minus Ist in die Kennlinie eintragen.
@@ -809,3 +985,20 @@ class Learner:
         self.plant.episodes += 1
         self.plant.last_fit = fit
         return fit
+
+
+def _key(name: tuple[str | None, str]) -> str:
+    return f"{name[0] or ''}|{name[1]}"
+
+
+def _name(key: str) -> tuple[str | None, str]:
+    room, _, quantity = key.rpartition("|")
+    return (room or None, quantity)
+
+
+def _info_to_json(info: dict) -> dict[str, dict[str, float]]:
+    return {_key(a): {_key(b): round(v, 6) for b, v in row.items()} for a, row in info.items()}
+
+
+def _info_from_json(info: dict[str, dict[str, float]]) -> dict:
+    return {_name(a): {_name(b): v for b, v in row.items()} for a, row in info.items()}

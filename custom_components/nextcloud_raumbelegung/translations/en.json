@@ -139,6 +139,12 @@
       },
       "prediction_error": {
         "name": "Prediction error"
+      },
+      "global_model_fit": {
+        "name": "Model fit"
+      },
+      "global_test_run": {
+        "name": "Suggested test run"
       }
     }
   },

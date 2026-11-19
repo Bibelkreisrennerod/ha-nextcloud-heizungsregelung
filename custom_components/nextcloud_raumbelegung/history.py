@@ -20,7 +20,10 @@ from .learning import SAMPLE, Learner, RoomSample
 from .physics import PlantParams, PlantState, plant_step, valve
 
 Series = list[tuple[datetime, float]]  # (Zeitpunkt, Wert), aufsteigend
-MAX_AGE = timedelta(hours=2)  # aelterer letzter Wert gilt als unbekannt
+# Der Recorder speichert nur Aenderungen: ein Ventil bleibt nachts oft stundenlang
+# auf 0 %, ohne dass ein neuer Wert kommt. Erst nach 12 h gilt ein Wert als unbekannt
+# (z. B. Home Assistant war so lange aus).
+MAX_AGE = timedelta(hours=12)
 
 
 @dataclass

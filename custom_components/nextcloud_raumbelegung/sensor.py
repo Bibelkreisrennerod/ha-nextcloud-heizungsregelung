@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from datetime import datetime
 from typing import Any
 
@@ -46,6 +48,8 @@ async def async_setup_entry(
             BoilerRatedSensor(entry, None, "boiler_rated"),
             BoilerStartupSensor(entry, None, "boiler_startup"),
             CalibrationSensor(entry, None, "calibration"),
+            ModelFitSensor(entry, None, "model_fit"),
+            TestRunSensor(entry, None, "test_run"),
         ]
         + (
             [
@@ -222,6 +226,7 @@ class CoolingRateSensor(StatusEntity, SensorEntity):
             "auskuehlkonstante_pro_h": round(a, 4) if a else None,
             "zeitkonstante_h": round(1 / a, 1) if a else None,
             "messfenster": self._status.get("cool_windows"),
+            "unsicherheit_prozent": _spread(self._status, "a"),
         }
 
 
@@ -248,6 +253,7 @@ class HeatingRateSensor(StatusEntity, SensorEntity):
         return {
             "netto_bei_20_k": round(b - 20 * a, 2) if a is not None and b is not None else None,
             "aufheizvorgaenge": status.get("heat_windows"),
+            "unsicherheit_prozent": _spread(status, "b"),
         }
 
 
@@ -274,6 +280,7 @@ class PowerDemandSensor(StatusEntity, SensorEntity):
         return {
             "kw": round(w * kw, 1) if w is not None and kw else None,
             "gemessen": status.get("w_measured", False),
+            "unsicherheit_prozent": _spread(status, "w"),
         }
 
 
@@ -295,7 +302,11 @@ class DeadTimeSensor(StatusEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return {"gemessene_heizbeginne": self._status.get("dead_events")}
+        sigma = (self._status.get("sigma") or {}).get("d")
+        return {
+            "gemessene_heizbeginne": self._status.get("dead_events"),
+            "unsicherheit_min": None if sigma is None else round(sigma * 60),
+        }
 
 
 class PredictionErrorSensor(StatusEntity, SensorEntity):
@@ -532,3 +543,63 @@ class BoilerStateSensor(StatusEntity, SensorEntity):
                 for key, item in (boiler.values.items() if boiler else [])
             },
         }
+
+
+def _spread(status: dict[str, Any], key: str) -> int | None:
+    """Unsicherheit (1 Standardabweichung) eines gelernten Werts in Prozent."""
+    sigma = (status.get("sigma") or {}).get(key)
+    return None if sigma is None else round(100 * (math.exp(sigma) - 1))
+
+
+class ModelFitSensor(StatusEntity, SensorEntity):
+    """Gemeinsame Anpassung aller Werte: mittlerer Vorhersagefehler (K)."""
+
+    _attr_native_unit_of_measurement = UnitOfTemperature.KELVIN
+    _attr_suggested_display_precision = 2
+    _attr_icon = "mdi:chart-bell-curve"
+    _unrecorded_attributes = frozenset({"raeume", "pufferreserve_unsicherheit_prozent"})
+
+    @property
+    def native_value(self) -> float | None:
+        fit = self._status.get("fit") or {}
+        return fit.get("rms")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        fit = self._status.get("fit") or {}
+        return {
+            "zeitpunkt": fit.get("zeitpunkt"),
+            "messpunkte": fit.get("rows"),
+            "vorhersagen": fit.get("residuals"),
+            "schritte": fit.get("iterations"),
+            "neue_messpunkte": self._status.get("rows_pending"),
+            "pufferreserve_unsicherheit_prozent": fit.get("e_buf_spread"),
+            "raeume": fit.get("rooms"),
+        }
+
+
+class TestRunSensor(StatusEntity, SensorEntity):
+    """Testlauf, der die Unsicherheit der Werte am staerksten verkleinern wuerde."""
+
+    _attr_icon = "mdi:flask-outline"
+    _unrecorded_attributes = frozenset({"alle", "verbessert"})
+
+    @property
+    def native_value(self) -> str | None:
+        runs = (self._status.get("fit") or {}).get("experiments") or []
+        return runs[0]["label"] if runs else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        fit = self._status.get("fit") or {}
+        runs = fit.get("experiments") or []
+        best = runs[0] if runs else {}
+        return {
+            "raeume": best.get("rooms"),
+            "informationsgewinn": best.get("gain"),
+            "dauer_h": best.get("hours"),
+            "aussentemperatur": fit.get("outside"),
+            "verbessert": best.get("improves"),
+            "alle": [{"lauf": r["label"], "gewinn": r["gain"], "dauer_h": r["hours"]} for r in runs],
+        }
+

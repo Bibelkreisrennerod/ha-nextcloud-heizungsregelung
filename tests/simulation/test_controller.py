@@ -178,4 +178,6 @@ async def main(mode):
     print("Befehle:",[x for x in cmds(since) if x[2] not in ("heat",)])
     for r in ROOMS: print("Protokoll",r,{k:v for k,v in (c.history.get(r) or [{}])[0].items() if k in ("heizstart","erreicht_um","abweichung_frist","vorhergesagt","aufheizdauer","gewertet")})
     print("Notizen:",list(stubs.NOTES))
+    fs=c.learner.fit_state or {}
+    print("Anpassung:",fs.get("rows"),"Messpunkte, Fehler",fs.get("rms"),"K, Empfehlung",(fs.get("experiments") or [{}])[0].get("label"),"Sensor:",{k:c.status.get("fit",{}).get(k) for k in ("rms","zeitpunkt","e_buf_spread")})
 asyncio.run(main(sys.argv[1] if len(sys.argv)>1 else "auto"))

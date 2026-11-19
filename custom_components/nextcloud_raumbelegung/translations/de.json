@@ -143,6 +143,12 @@
       },
       "prediction_error": {
         "name": "Vorhersagefehler"
+      },
+      "global_model_fit": {
+        "name": "Modellanpassung"
+      },
+      "global_test_run": {
+        "name": "Empfohlener Testlauf"
       }
     }
   },

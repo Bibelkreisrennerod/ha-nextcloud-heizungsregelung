@@ -50,7 +50,7 @@ class Store:
     def async_delay_save(s,f,d): Store.DATA[s.k]=f()
 st.Store=Store
 udt=mod("homeassistant.util.dt")
-udt.utcnow=lambda: NOW[0]; udt.now=lambda: NOW[0]
+udt.utcnow=lambda: NOW[0]; udt.now=lambda: NOW[0]; udt.UTC=timezone.utc
 udt.as_local=lambda d: d.astimezone(timezone(timedelta(hours=1)))
 udt.as_utc=lambda d: d.astimezone(timezone.utc)
 udt.parse_datetime=lambda s: datetime.fromisoformat(s)

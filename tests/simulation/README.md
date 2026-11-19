@@ -6,7 +6,7 @@ lernen.
 
 | Datei | Prüft |
 | --- | --- |
-| `test_learn.py [flow]` | Lernen aus Auskühlen und zwei Kalibrierläufen (mit `flow`: mit Vorlauftemperatur); schreibt `learned.json` |
+| `test_learn.py [flow]` | Lernen aus Auskühlen und drei Kalibrierläufen (mit `flow`: mit Vorlauftemperatur), nach Lauf 1, 2 und 3 je eine gemeinsame Anpassung mit Unsicherheiten und empfohlenem nächsten Testlauf; schreibt `learned.json` |
 | `test_plan.py [truth]` | Planung eines Sonntags bei 1, −7 und 7 °C; mit `truth` mit den wahren Parametern, sonst mit `learned.json` |
 | `test_controller.py auto\|calib\|observe\|history\|restart` | Steuerung mit nachgebildetem Home Assistant: Sonntag mit Automatik, Kalibrierlauf, Beobachten bei Automatik aus, Lernen aus 3 Tagen Recorder-Historie, Neustart während Kalibrierlauf und während des Aufheizens |
 
