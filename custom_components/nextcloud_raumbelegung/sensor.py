@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import CONF_STOKERCLOUD
 from .entity import StatusEntity, add_room_entities
+from .physics import CURVE_DEV
 
 PROTOCOL_ROWS = 20
 
@@ -188,7 +189,14 @@ class ValveSensor(StatusEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         count = self._status.get("valve_count")
-        return {"ventile": count, "geschaetzt": not count}
+        curve = self._status.get("curve")
+        attrs: dict[str, Any] = {"ventile": count, "geschaetzt": not count}
+        if curve:
+            # Gelernte Kennlinie: Ventilstellung (%) je Abweichung Soll minus Ist
+            attrs["hoechstoeffnung"] = round(max(curve) * 100)
+            attrs["kennlinie"] = {f"{x:+.1f} K": round(v * 100) for x, v in zip(CURVE_DEV, curve)}
+            attrs["gemessene_stuetzstellen"] = self._status.get("curve_points")
+        return attrs
 
 
 class CoolingRateSensor(StatusEntity, SensorEntity):

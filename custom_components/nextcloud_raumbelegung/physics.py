@@ -23,19 +23,45 @@ Kessel deckt der Puffer. Wird er leer, sinkt der Vorlauf und alle offenen
 Raeume teilen sich die Kesselleistung. Der Kessel springt an, wenn der
 Puffer unter 90 % faellt, und liefert erst nach seiner Anlaufzeit.
 
-Die Thermostate regeln proportional: das Ventil ist voll offen, solange der
-Raum mehr als BAND Kelvin unter dem Sollwert liegt, und schliesst linear bis
-zum Sollwert. So bildet das Modell auch Zwischen-Sollwerte ab.
+Ventilkennlinie: Die Homematic-Thermostate regeln selbst (PI-Regler, der
+aus frueheren Heizvorgaengen lernt) und oeffnen das Ventil fast nie ganz;
+jeder Heizkoerper hat seine eigene Hoechstoeffnung (gemessen am 19.11.2026:
+Saal 48 %, Nebenraum gross 83 %). Das Modell beschreibt das je Raum mit einer
+gelernten Kennlinie: Ventilstellung beim Aufheizen an Stuetzstellen der
+Abweichung Soll minus Ist (CURVE_DEV), dazwischen linear. Weil der Regler
+einen I-Anteil hat, haelt er einen Raum auf Dauer genau am Sollwert, solange
+die Hoechstoeffnung reicht. Im Modell oeffnet das Ventil deshalb um die
+Halte-Oeffnung (a * (Raum - aussen) / b) herum: unter dem Sollwert
+mindestens so weit wie die Halte-Oeffnung plus den Anstieg der Kennlinie
+ueber ihren Wert am Sollwert, darueber entsprechend weniger (siehe valve). Ohne Messwerte gilt
+PRIOR_SHAPE, ebenfalls aus diesen Messungen: am Sollwert halb offen, voll ab
+2,5 K darunter, zu ab 0,5 K darueber. b und w gelten je Einheit
+Ventilstellung (1.0 = 100 %), wie sie die Thermostate melden.
 """
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
 
-BAND = 0.8  # Proportionalband der Thermostate (K)
 REACH_TOLERANCE = 0.5  # "warm" = Sollwert minus diese Kelvin
+
+# Stuetzstellen der Ventilkennlinie: Abweichung Soll minus Ist (K)
+CURVE_DEV = (-1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0)
+
+
+def _prior_shape(dev: float) -> float:
+    if dev <= -0.5:
+        return 0.0
+    if dev < 0.0:
+        return 0.5 + dev
+    return min(0.5 + 0.2 * dev, 1.0)
+
+
+# Startform relativ zur Hoechstoeffnung (Messungen Saal und Nebenraum gross)
+PRIOR_SHAPE = tuple(_prior_shape(x) for x in CURVE_DEV)
 
 
 @dataclass
@@ -46,6 +72,8 @@ class RoomParams:
     b: float = 2.0  # K/h
     w: float = 0.3  # Anteil der Kessel-Dauerleistung
     d: float = 0.15  # Totzeit in h (9 min)
+    # Ventilstellung 0..1 an den Stuetzstellen CURVE_DEV; None = PRIOR_SHAPE
+    curve: tuple[float, ...] | None = None
 
     def heat_loss(self, delta: float = 20.0) -> float:
         """Temperaturverlust in K/h bei 'delta' Kelvin Unterschied nach aussen."""
@@ -73,11 +101,49 @@ class PlantState:
         return PlantState(self.e, self.boiler_on, self.on_for)
 
 
-def valve(setpoint: float | None, temp: float) -> float:
-    """Ventilstellung 0..1 eines proportional regelnden Thermostats."""
+def _interp(points: tuple[float, ...], dev: float) -> float:
+    if dev <= CURVE_DEV[0]:
+        return points[0]
+    if dev >= CURVE_DEV[-1]:
+        return points[-1]
+    i = bisect_right(CURVE_DEV, dev) - 1
+    f = (dev - CURVE_DEV[i]) / (CURVE_DEV[i + 1] - CURVE_DEV[i])
+    return points[i] + f * (points[i + 1] - points[i])
+
+
+def valve(
+    setpoint: float | None,
+    temp: float,
+    curve: tuple[float, ...] | None = None,
+    hold: float | None = None,
+) -> float:
+    """Ventilstellung 0..1 laut Kennlinie des Raums.
+
+    hold: Ventilstellung, mit der die aktuelle Temperatur gerade gehalten wird
+    (a * (Raum - aussen) / b). Ohne hold gilt die Kennlinie allein.
+    Mit hold (I-Anteil des Reglers): unter dem Sollwert die Kennlinie, aber
+    mindestens hold plus deren Anstieg ueber den Wert am Sollwert; ueber dem
+    Sollwert hold abzueglich des Abfalls der Kennlinie. Am Sollwert also genau
+    hold: der Raum bleibt dort stehen. Hoechstens bis zur Hoechstoeffnung.
+    """
     if setpoint is None:
         return 0.0
-    return min(max((setpoint - temp) / BAND, 0.0), 1.0)
+    points = curve or PRIOR_SHAPE
+    dev = setpoint - temp
+    opening = _interp(points, dev)
+    if hold is None:
+        return opening
+    around_hold = hold + opening - _interp(points, 0.0)
+    if dev > 0:
+        opening = max(opening, around_hold)
+    else:
+        opening = around_hold
+    return min(max(opening, 0.0), max(points))
+
+
+def hold_opening(params: RoomParams, temp: float, outside: float) -> float:
+    """Ventilstellung, mit der die Temperatur gerade gehalten wird."""
+    return params.a * (temp - outside) / params.b if params.b > 0 else 0.0
 
 
 def plant_step(
@@ -148,7 +214,7 @@ def solo_minutes(
     temp, minutes, dt = t_from, 0.0, 5 / 60
     delay = Delay(params.d, dt)
     while temp < t_to - REACH_TOLERANCE and minutes < limit:
-        opening = valve(t_to, temp)
+        opening = valve(t_to, temp, params.curve, hold_opening(params, temp, outside))
         _, share = plant_step(params.w * opening, plant, state, dt)
         temp = room_step(temp, params, delay.push(opening * share), outside, dt)
         minutes += 5
@@ -156,12 +222,14 @@ def solo_minutes(
 
 
 @lru_cache(maxsize=256)
-def _b_for(minutes: float, a: float, w: float, e_buf: float, t_start: float, d: float) -> float:
+def _b_for(
+    minutes: float, a: float, w: float, e_buf: float, t_start: float, d: float, curve: tuple[float, ...] | None
+) -> float:
     plant = PlantParams(e_buf=e_buf, t_start=t_start)
-    low, high = 0.05, 60.0
+    low, high = 0.05, 200.0
     for _ in range(40):
         mid = (low + high) / 2
-        if solo_minutes(RoomParams(a=a, b=mid, w=w, d=d), plant, limit=minutes + 60) > minutes:
+        if solo_minutes(RoomParams(a=a, b=mid, w=w, d=d, curve=curve), plant, limit=minutes + 60) > minutes:
             low = mid
         else:
             high = mid
@@ -169,7 +237,12 @@ def _b_for(minutes: float, a: float, w: float, e_buf: float, t_start: float, d: 
 
 
 def b_for_minutes(
-    minutes: float, a: float, w: float = 0.0, plant: PlantParams | None = None, d: float = 0.0
+    minutes: float,
+    a: float,
+    w: float = 0.0,
+    plant: PlantParams | None = None,
+    d: float = 0.0,
+    curve: tuple[float, ...] | None = None,
 ) -> float:
     """Aufheizrate b, mit der ein Raum allein in 'minutes' von 14 auf 21 Grad
     kommt (bei 0 Grad aussen, voller Puffer, mit Kessel- und Pufferbegrenzung).
@@ -186,4 +259,5 @@ def b_for_minutes(
         round(plant.e_buf, 2),
         round(plant.t_start, 2),
         round(min(d, minutes / 60 / 2), 2),
+        tuple(round(v * 20) / 20 for v in curve) if curve else None,  # grob, damit der Cache greift
     )

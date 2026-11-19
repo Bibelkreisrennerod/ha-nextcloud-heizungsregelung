@@ -56,6 +56,7 @@ from .physics import (
     PlantState,
     RoomParams,
     plant_step,
+    hold_opening,
     room_step,
     valve,
 )
@@ -179,11 +180,13 @@ def simulate(
     moment = now
     while moment < until:
         setpoints = [setpoint_at(r, plans.get(r.name, RoomPlan()), moment, idle) for r in rooms]
-        valves = [valve(s, t) for s, t in zip(setpoints, temps)]
+        out = outside(moment)
+        valves = [
+            valve(s, t, p.curve, hold_opening(p, t, out)) for s, t, p in zip(setpoints, temps, params)
+        ]
         demand = sum(p.w * v for p, v in zip(params, valves))
         supply, share = plant_step(demand, plant, state, STEP_H)
         energy += supply * STEP_H
-        out = outside(moment)
         temps = [
             room_step(t, p, delay.push(v * share), out, STEP_H)
             for t, p, v, delay in zip(temps, params, valves, delays)
@@ -409,16 +412,21 @@ def plan_heating(
                     low = getattr(plan, name)
                     high = deadline[room.name] if name == "main" else plan.main - STEP
                     lo, hi = 0, max(0, int((high - low) / STEP))
+                    def shifted(steps: int, plan: RoomPlan = plan, name: str = name) -> RoomPlan:
+                        if name == "main" and room.committed == "pre":
+                            return make(room, low + STEP * steps)  # laufende Vorstufe bleibt
+                        return replace(plan, **{name: low + STEP * steps})
+
                     while lo < hi:
                         mid = (lo + hi + 1) // 2
-                        trial = {**current, room.name: replace(plan, **{name: low + STEP * mid})}
+                        trial = {**current, room.name: shifted(mid)}
                         after = run(trial)
                         if keeps(before, after) and _cost(rooms, trial, after, until) <= before_cost + 1e-6:
                             lo = mid
                         else:
                             hi = mid - 1
                     if lo > 0:
-                        current = {**current, room.name: replace(plan, **{name: low + STEP * lo})}
+                        current = {**current, room.name: shifted(lo)}
                         moved = True
             if not moved:
                 break

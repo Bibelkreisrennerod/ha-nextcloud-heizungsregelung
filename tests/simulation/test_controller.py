@@ -13,9 +13,11 @@ ctl=importlib.import_module("nextcloud_raumbelegung.controller")
 cal=importlib.import_module("nextcloud_raumbelegung.caldav")
 P=importlib.import_module("nextcloud_raumbelegung.physics")
 
-ROOMS={"Saal":("saal",5,P.RoomParams(a=0.035,b=3.2,w=1.3)),
-       "Nebenraum (groß)":("ng",1,P.RoomParams(a=0.07,b=4.0,w=0.35)),
-       "Küche":("kuche",1,P.RoomParams(a=0.09,b=4.0,w=0.2))}
+def _curve(top,zero=-0.4,at0=0.55,full=3.0):  # wie harness.true_curve
+    return tuple(top*(0.0 if x<=zero else (at0*(x-zero)/(-zero) if x<0 else min(1.0,at0+(1-at0)*x/full))) for x in P.CURVE_DEV)
+ROOMS={"Saal":("saal",5,P.RoomParams(a=0.035,b=3.2/0.48,w=1.3/0.48,curve=_curve(0.48))),
+       "Nebenraum (groß)":("ng",1,P.RoomParams(a=0.07,b=4.0/0.83,w=0.35/0.83,curve=_curve(0.83))),
+       "Küche":("kuche",1,P.RoomParams(a=0.09,b=4.0/0.75,w=0.2/0.75,curve=_curve(0.75)))}
 TPLANT=P.PlantParams(e_buf=0.7,t_start=0.3)
 ents=[Ent("sensor.hmip_duty_cycle",None)]
 for r,(aid,n,_) in ROOMS.items():
@@ -34,7 +36,7 @@ def publish():
         if e in UNAVAILABLE:
             hass.states[e]=State("unavailable",{}); continue
         hass.states[e]=State(hass.modes.get(e,"auto"),{"current_temperature":round(temps[r],1),"temperature":hass.setpoints[e]})
-        v=P.valve(hass.setpoints[e],temps[r])
+        v=VALVES.get(r,0.0)
         for i in range(n): hass.states[f"sensor.{aid}_heizkorper_{i}_heizen"]=State(str(round(v*100)),{"unit_of_measurement":"%"})
     hass.states["weather.home"]=State("rainy",{"temperature":round(outside_at(stubs.NOW[0]),1)})
     hass.states["sensor.flow"]=State(str(round(20+50*SHARE[0],1)),{})
@@ -45,9 +47,15 @@ def publish():
             if not hist or hist[-1].state!=st.state or hist[-1].attributes!=st.attributes:
                 hist.append(State(st.state,dict(st.attributes),stubs.NOW[0]))
 RECORD=[False]
+VALVES={}; INTEGRAL={r:0.0 for r in ROOMS}; KI=0.15
 def physics():
     dt=1/60
-    vs={r:P.valve(hass.setpoints[f"climate.{aid}"],temps[r]) for r,(aid,_,_) in ROOMS.items()}
+    for r,(aid,_,prm) in ROOMS.items():
+        # Thermostat mit P-Anteil (Kennlinie) und I-Anteil, begrenzt auf die Hoechstoeffnung
+        sp=hass.setpoints[f"climate.{aid}"]; top=max(prm.curve); dev=sp-temps[r]; p=P.valve(sp,temps[r],prm.curve)
+        if not (dev>0 and p+INTEGRAL[r]>=top): INTEGRAL[r]=min(max(INTEGRAL[r]+KI*dev*dt,0.0),top)
+        VALVES[r]=min(max(p+INTEGRAL[r],0.0),top)
+    vs=dict(VALVES)
     D=sum(ROOMS[r][2].w*vs[r] for r in ROOMS)
     sup,share=P.plant_step(D,TPLANT,state,dt); SHARE[0]=share
     for r in ROOMS: temps[r]=P.room_step(temps[r],ROOMS[r][2],vs[r]*share,outside_at(stubs.NOW[0]),dt)

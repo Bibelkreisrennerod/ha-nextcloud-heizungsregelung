@@ -581,14 +581,16 @@ class HeatingController:
         target = sum(targets) / len(targets) if targets else None
         return temp, target
 
-    def _valve_reading(self, sensors: list[str], target: float | None, temp: float | None) -> float | None:
-        """Mittlere Ventilstellung 0..1; ohne Sensoren aus Soll- und Isttemperatur geschaetzt."""
+    def _valve_reading(
+        self, room: str, sensors: list[str], target: float | None, temp: float | None
+    ) -> float | None:
+        """Mittlere Ventilstellung 0..1; ohne Sensoren aus Soll/Ist und Kennlinie geschaetzt."""
         values = [v for v in (_float(self.hass, s) for s in sensors) if v is not None]
         if values:
             return min(max(sum(values) / len(values) / 100.0, 0.0), 1.0)
         if target is None or temp is None:
             return None
-        return valve(target, temp)
+        return valve(target, temp, self.learner.curve(room))
 
     def _outside_now(self) -> float | None:
         value = _float(self.hass, self.entry.options.get(CONF_OUTSIDE_SENSOR))
@@ -746,7 +748,7 @@ class HeatingController:
                 "area": area_id,
                 "temp": temp,
                 "target_now": target_now,
-                "valve": self._valve_reading(valve_sensors, target_now, temp),
+                "valve": self._valve_reading(room, valve_sensors, target_now, temp),
                 "valve_count": len(valve_sensors),
                 "comfort": self.setting(room, "comfort"),
                 "events": events,
@@ -801,7 +803,9 @@ class HeatingController:
                 continue
             stats = self.learner.room_stats(room)
             stats.valves = max(1, info["valve_count"])
-            samples[room] = RoomSample(now, info["temp"], info["valve"], info["target_now"])
+            samples[room] = RoomSample(
+                now, info["temp"], info["valve"], info["target_now"], measured=info["valve_count"] > 0
+            )
             prior[room] = self.setting(room, "preheat")
             demand += self.room_params(room).w * (info["valve"] or 0.0)
         # Pufferreserve fortschreiben; der Vorlauf korrigiert, wenn bekannt
@@ -1400,6 +1404,8 @@ class HeatingController:
             "b": params.b,
             "w": params.w,
             "d": params.d,
+            "curve": params.curve,
+            "curve_points": self.learner.curve_points(room),
             "dead_events": stats.dead_events,
             "calibrated": self.learner.calibrated(room),
             "err_idle": stats.err_idle,

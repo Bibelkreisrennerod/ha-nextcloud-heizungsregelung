@@ -22,6 +22,9 @@ def report(title):
     for r in ROOMS:
         p=lr.room_params(r,PRIOR[r]); t=TRUE[r]; st=lr.room_stats(r)
         print(f"  {r[:18]:18} a {p.a:.3f}/{t.a:.3f}  b {p.b:.2f}/{t.b:.2f}  w {p.w:.2f}/{t.w:.2f}  d {p.d*60:.0f}/{t.d*60:.0f} min  cool {st.cool_windows} heat {st.heat_windows} tot {st.dead_events}  fehler {st.err_idle or 0:.2f}/{st.err_heat or 0:.2f} K ({st.err_idle_n}/{st.err_heat_n}) {'kalibriert' if lr.calibrated(r) else ''}")
+    for r in ROOMS:
+        c=lr.curve(r); t=TRUE[r].curve
+        print(f"  Kennlinie {r[:18]:18} " + " ".join(f"{x:+.1f}:{round(v*100)}/{round(u*100)}" for x,v,u in zip(P.CURVE_DEV,c,t)) + f"  (gemessen {lr.curve_points(r)})")
     print(f"  e_buf {pp.e_buf:.2f}/{TPLANT.e_buf}  t_start {pp.t_start:.2f}/{TPLANT.t_start}  episodes {lr.plant.episodes} fit {lr.plant.last_fit}")
 # Nacht: alle frei auskuehlen (Sollwert 5) 
 run(8, lambda r,t: 5.0); report("nach 8 h Auskuehlen")

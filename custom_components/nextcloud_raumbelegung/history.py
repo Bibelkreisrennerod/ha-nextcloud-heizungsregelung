@@ -106,11 +106,12 @@ def replay(
             if temp is None:
                 continue
             opening = _mean([c.at(moment) for c in valves])
+            measured = opening is not None
             if opening is not None:
                 opening = min(max(opening / 100.0, 0.0), 1.0)
             elif target is not None:
-                opening = valve(target, temp)
-            samples[name] = RoomSample(moment, temp, opening, target)
+                opening = valve(target, temp, learner.curve(name))
+            samples[name] = RoomSample(moment, temp, opening, target, measured=measured)
             demand += learner.room_params(name, prior_minutes.get(name, 120.0)).w * (opening or 0.0)
         gauge.e = min(gauge.e, plant.e_buf)
         _, share = plant_step(demand, plant, gauge, hours)

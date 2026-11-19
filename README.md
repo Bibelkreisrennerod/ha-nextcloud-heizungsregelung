@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.3.3. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.3.4. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -21,6 +21,16 @@ Nextcloud direkt ab.
   Leistungsbedarf (Anteil der Kessel-Dauerleistung bei offenen Ventilen)
   und Totzeit (wie lange es nach dem Öffnen der Ventile dauert, bis die
   Wärme am Temperaturfühler ankommt).
+  Dazu je Raum die **Ventilkennlinie**: wie weit die Homematic-Thermostate
+  beim Aufheizen öffnen, abhängig davon, wie weit der Raum unter dem
+  Sollwert liegt. Gemessen öffnen sie nie ganz (Saal höchstens 48 %,
+  Nebenraum (groß) 83 %) und drosseln schon 2–3 K vor dem Ziel. Die
+  Kennlinie wird aus den gemeldeten Ventilstellungen gelernt und im
+  Attribut des Sensors „Ventilstellung“ angezeigt. Aufheizrate und
+  Leistungsbedarf gelten je 100 % Ventilstellung; die Schwellen für „Ventil
+  offen“ beziehen sich auf die Höchstöffnung des Raums. Weil die
+  Thermostate einen I-Anteil haben, hält das Modell einen Raum am Sollwert
+  mit genau der Öffnung, die er dort braucht.
   Für die Anlage: Kessel-Dauerleistung, Anlaufzeit und nutzbare
   Pufferreserve. Zieht ein Raum mehr als der Kessel liefert (der Saal), deckt
   der Puffer die Lücke, bis er leer ist; danach teilen sich alle offenen

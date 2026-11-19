@@ -27,6 +27,10 @@ Fenster:
   der Messung verglichen. Ein Raum gilt als kalibriert, wenn genug Ruhe- und
   Heizfenster ausgewertet sind und der mittlere Fehler unter 0,5 K liegt;
   bis dahin bleibt der Sicherheitsfaktor bei mindestens 1,25.
+- Ventilkennlinie: Ventilstellung ueber der Abweichung Soll minus Ist, je
+  Raum aus den gemeldeten Ventilstellungen (ab 10 min nach einer
+  Sollwertaenderung), monoton geglaettet. Die Schwellen fuer "Ventil offen"
+  gelten relativ zur Hoechstoeffnung des Raums.
 - Totzeit: Zeit vom Oeffnen der Ventile (aus der Ruhe) bis die Temperatur um
   RISE Kelvin gestiegen ist, abzueglich der Zeit, die der Anstieg selbst mit
   der bekannten Aufheizrate braucht.
@@ -44,14 +48,32 @@ from datetime import datetime, timedelta
 import math
 from typing import Any
 
-from .physics import Delay, PlantParams, PlantState, RoomParams, b_for_minutes, plant_step, room_step
+from .physics import (
+    CURVE_DEV,
+    PRIOR_SHAPE,
+    Delay,
+    PlantParams,
+    PlantState,
+    RoomParams,
+    b_for_minutes,
+    plant_step,
+    room_step,
+)
 
 SAMPLE = timedelta(minutes=5)
 DECAY = 0.9998  # je Messpunkt, Halbwertszeit ~ 12 Tage
 COOL_WINDOW = 12  # Messpunkte (60 min)
 HEAT_WINDOW = 3  # Messpunkte (15 min)
 VALVE_CLOSED = 0.03
+# Schwellen fuer "offen" gelten relativ zur Hoechstoeffnung des Raums (Kennlinie):
+# die Homematic-Thermostate oeffnen je nach Heizkoerper nur bis 50..90 %.
 VALVE_OPEN = 0.7
+VALVE_MIN_GAIN = 0.1  # darunter ist der Gewinn je Ventiloeffnung zu unsicher
+CURVE_SETTLE = timedelta(minutes=10)  # nach einer Sollwertaenderung erst so lange warten
+CURVE_RISE = 1.0  # K: Sollwertsprung, ab dem ein Aufheizvorgang beginnt
+CURVE_AFTER = timedelta(minutes=30)  # nach Erreichen des Sollwerts noch so lange mitschreiben
+CURVE_MIN = 3.0  # Messpunkte, ab denen eine Stuetzstelle als gemessen gilt
+LAMBDA_C = 1.0  # Startwert der Kennlinie zaehlt wie ein Messpunkt
 
 PRIOR_A = 0.05
 PRIOR_W_SINGLE = 0.3  # Raum mit einem Thermostat
@@ -93,6 +115,7 @@ class RoomSample:
     temp: float | None
     valve: float | None  # 0..1
     setpoint: float | None
+    measured: bool = True  # Ventilstellung gemessen (nicht aus Soll/Ist geschaetzt)
 
 
 @dataclass
@@ -117,6 +140,9 @@ class RoomStats:
     err_idle_n: int = 0
     err_heat: float | None = None  # ... mit Heizen
     err_heat_n: int = 0
+    # Ventilkennlinie: gewichtete Summen der Ventilstellung je Stuetzstelle CURVE_DEV
+    cv: list[float] = field(default_factory=lambda: [0.0] * len(CURVE_DEV))
+    cw: list[float] = field(default_factory=lambda: [0.0] * len(CURVE_DEV))
 
     def to_dict(self) -> dict:
         return dict(self.__dict__)
@@ -127,7 +153,29 @@ class RoomStats:
         for key, value in data.items():
             if hasattr(stats, key):
                 setattr(stats, key, value)
+        if len(stats.cv) != len(CURVE_DEV) or len(stats.cw) != len(CURVE_DEV):
+            stats.cv, stats.cw = [0.0] * len(CURVE_DEV), [0.0] * len(CURVE_DEV)
         return stats
+
+
+def top_opening(curve: tuple[float, ...] | None) -> float:
+    """Hoechstoeffnung laut Kennlinie (Bezug fuer die Schwellen "offen")."""
+    return max(max(curve or PRIOR_SHAPE), 0.1)
+
+
+def _isotonic(values: list[float], weights: list[float]) -> list[float]:
+    """Gewichtete monotone (nicht fallende) Glaettung, Pool-Adjacent-Violators."""
+    blocks: list[list[float]] = []  # [Mittel, Gewicht, Anzahl]
+    for value, weight in zip(values, weights):
+        blocks.append([value, weight, 1])
+        while len(blocks) > 1 and blocks[-2][0] > blocks[-1][0]:
+            v2, w2, n2 = blocks.pop()
+            v1, w1, n1 = blocks.pop()
+            blocks.append([(v1 * w1 + v2 * w2) / (w1 + w2), w1 + w2, n1 + n2])
+    result: list[float] = []
+    for value, _, count in blocks:
+        result += [value] * count
+    return result
 
 
 @dataclass
@@ -175,6 +223,8 @@ class Learner:
         self._last_episode_end: datetime | None = None
         self._flow_full: float | None = data.get("flow_full")
         self._quiet_since: datetime | None = None  # seit wann kein Raum aufheizt (Ventile < VALVE_OPEN)
+        # Sollwert, seit wann, ob es ein Aufheizvorgang ist, wann der Sollwert erreicht war
+        self._setpoint: dict[str, tuple[float, datetime, bool, datetime | None]] = {}
 
     def to_dict(self) -> dict:
         return {
@@ -196,14 +246,41 @@ class Learner:
         w = min(max(w, 0.02), 5.0)
         d = (stats.swd_d + LAMBDA_D * PRIOR_D) / (stats.sw_d + LAMBDA_D)
         d = min(max(d, 0.0), DEAD_MAX)
-        b0 = b_for_minutes(prior_minutes, a, w, self.plant_params(PlantParams()), d)
+        curve = self.curve(room)
+        b0 = b_for_minutes(prior_minutes, a, w, self.plant_params(PlantParams()), d, curve)
         b = (stats.swb_b + LAMBDA_B * b0) / (stats.sw_b + LAMBDA_B)
-        b = min(max(b, 0.1), 20.0)
-        return RoomParams(a=a, b=b, w=w, d=d)
+        b = min(max(b, 0.1), 60.0)
+        return RoomParams(a=a, b=b, w=w, d=d, curve=curve)
+
+    def curve(self, room: str) -> tuple[float, ...]:
+        """Gelernte Ventilkennlinie (Ventilstellung 0..1 an den Stuetzstellen CURVE_DEV).
+
+        Stuetzstellen ohne Messung folgen der Startform, skaliert auf die
+        hoechste gemessene Oeffnung beim Aufheizen (ab 1,5 K unter Soll). Die
+        Kennlinie wird monoton geglaettet: mehr Abstand zum Sollwert heisst nie
+        weniger Oeffnung.
+        """
+        stats = self.room_stats(room)
+        raw = [cv / cw if cw >= CURVE_MIN else None for cv, cw in zip(stats.cv, stats.cw)]
+        high = [v for x, v in zip(CURVE_DEV, raw) if v is not None and x >= 1.5]
+        scale = max(high) if high else 1.0
+        values = [
+            (cv + LAMBDA_C * scale * prior) / (cw + LAMBDA_C)
+            for cv, cw, prior in zip(stats.cv, stats.cw, PRIOR_SHAPE)
+        ]
+        weights = [cw + LAMBDA_C for cw in stats.cw]
+        return tuple(round(min(max(v, 0.0), 1.0), 3) for v in _isotonic(values, weights))
+
+    def curve_points(self, room: str) -> int:
+        """Anzahl der Stuetzstellen mit eigenen Messungen."""
+        return sum(1 for cw in self.room_stats(room).cw if cw >= CURVE_MIN)
 
     def _w_prior(self, room: str) -> float:
+        """Startwert fuer w je Einheit Ventilstellung: bei der Hoechstoeffnung des
+        Raums zieht jeder Heizkoerper etwa PRIOR_W_PER_VALVE der Kesselleistung."""
         valves = self.room_stats(room).valves
-        return PRIOR_W_SINGLE if valves <= 1 else PRIOR_W_PER_VALVE * valves
+        at_top = PRIOR_W_SINGLE if valves <= 1 else PRIOR_W_PER_VALVE * valves
+        return at_top / top_opening(self.curve(room))
 
     def plant_params(self, base: PlantParams) -> PlantParams:
         e_buf = (self.plant.e_sum + LAMBDA_E * base.e_buf) / (self.plant.e_w + LAMBDA_E)
@@ -291,7 +368,8 @@ class Learner:
         beim Start als voll.
         """
         self._outside.append((now, outside, buffer_fraction))
-        if all((sample.valve or 0.0) < VALVE_OPEN for sample in rooms.values()):
+        tops = {name: top_opening(self.curve(name)) for name in rooms}
+        if all((sample.valve or 0.0) < VALVE_OPEN * tops[name] for name, sample in rooms.items()):
             self._quiet_since = self._quiet_since or now
         else:
             self._quiet_since = None
@@ -303,15 +381,18 @@ class Learner:
             stats = self.room_stats(name)
             for key in ("sxx", "sxy", "sw_b", "swb_b", "sw_w", "sww_w", "sw_d", "swd_d"):
                 setattr(stats, key, getattr(stats, key) * DECAY)
+            stats.cv = [v * DECAY for v in stats.cv]
+            stats.cw = [v * DECAY for v in stats.cw]
             window = self._windows.setdefault(name, deque(maxlen=COOL_WINDOW + 1))
             window.append(sample)
+            self._curve_sample(name, stats, sample, now)
             if sample.valve is not None:
                 if sample.valve < VALVE_CLOSED:
                     if self._closed_since.get(name) is None:
                         self._closed_since[name] = now
                 else:
                     self._closed_since[name] = None
-                if sample.valve >= VALVE_OPEN:
+                if sample.valve >= VALVE_OPEN * tops[name]:
                     if self._open_since.get(name) is None:
                         self._open_since[name] = now
                 else:
@@ -325,7 +406,47 @@ class Learner:
             self._deadtime(name, stats, window, params, outside)
             gains[name] = self._gain(window, params, self._open_since.get(name))
         self._track_count += 1
-        self._episode_step(now, rooms, gains, buffer_fraction, boiler_kw, plant, prior_minutes, calibration, flow)
+        self._episode_step(
+            now, rooms, gains, buffer_fraction, boiler_kw, plant, prior_minutes, calibration, flow, tops
+        )
+
+    def _curve_sample(self, name: str, stats: RoomStats, sample: RoomSample, now: datetime) -> None:
+        """Ventilstellung zur Abweichung Soll minus Ist in die Kennlinie eintragen.
+
+        Nur beim Aufheizen: nach einem Sollwertsprung um mindestens CURVE_RISE
+        bis CURVE_AFTER nach dem Erreichen des Sollwerts. Beim Halten haengt die
+        Ventilstellung vom Waermebedarf ab (I-Anteil), das beschreibt die
+        Halte-Oeffnung im Modell. Nur gemessene Ventilstellungen und erst
+        CURVE_SETTLE nach der Aenderung (Stellmotoren und Meldungen sind langsam).
+        """
+        if sample.setpoint is None or sample.temp is None or sample.valve is None:
+            self._setpoint.pop(name, None)
+            return
+        last = self._setpoint.get(name)
+        if last is None or abs(last[0] - sample.setpoint) > 0.05:
+            rising = last is not None and sample.setpoint - last[0] >= CURVE_RISE
+            self._setpoint[name] = (sample.setpoint, now, rising, None)
+            return
+        setpoint, since, rising, reached = last
+        if reached is None and sample.temp >= setpoint:
+            reached = now
+            self._setpoint[name] = (setpoint, since, rising, reached)
+        if not rising or not sample.measured or now - since < CURVE_SETTLE:
+            return
+        if reached is not None and now - reached > CURVE_AFTER:
+            return
+        dev = sample.setpoint - sample.temp
+        if dev <= CURVE_DEV[0]:
+            parts = [(0, 1.0)]
+        elif dev >= CURVE_DEV[-1]:
+            parts = [(len(CURVE_DEV) - 1, 1.0)]
+        else:
+            i = next(k for k in range(len(CURVE_DEV) - 1) if CURVE_DEV[k] <= dev < CURVE_DEV[k + 1])
+            f = (dev - CURVE_DEV[i]) / (CURVE_DEV[i + 1] - CURVE_DEV[i])
+            parts = [(i, 1.0 - f), (i + 1, f)]
+        for index, weight in parts:
+            stats.cv[index] += weight * sample.valve
+            stats.cw[index] += weight
 
     def _check(self, stats: RoomStats, track: deque, params: RoomParams) -> None:
         """Die letzten 2 Stunden aus dem Startwert nachrechnen und mit der Messung vergleichen."""
@@ -340,7 +461,7 @@ class Learner:
         for t, v, o, s in list(track)[:-1]:
             temp = room_step(temp, params, delay.push(v * s), o, hours)
         error = abs(temp - track[-1][0])
-        if any(v >= 0.3 for _, v, _, _ in track):
+        if any(v >= 0.3 * top_opening(params.curve) for _, v, _, _ in track):
             stats.err_heat = error if stats.err_heat is None else (1 - CHECK_ALPHA) * stats.err_heat + CHECK_ALPHA * error
             stats.err_heat_n += 1
         else:
@@ -390,16 +511,21 @@ class Learner:
             self._dead.pop(name, None)
             return
         pending = self._dead.get(name)
+        top = top_opening(params.curve)
         if pending is None:
+            # Heizbeginn: Ventile oeffnen aus der Ruhe, weil der Sollwert deutlich
+            # ueber der Raumtemperatur liegt. Die Stellmotoren oeffnen langsam;
+            # die Zeit bis zur vollen Oeffnung gehoert zur Totzeit.
             if (
-                previous.valve is not None and previous.valve < 0.3
-                and previous.temp is not None and current.valve >= VALVE_OPEN
+                previous.valve is not None and previous.valve < 0.3 * top
+                and previous.temp is not None and current.valve >= 0.3 * top
+                and current.setpoint is not None and current.setpoint - current.temp >= 1.0
             ):
                 self._dead[name] = (current.time, previous.temp)
             return
         opened, start_temp = pending
         elapsed = (current.time - opened).total_seconds() / 3600
-        if current.valve < 0.5 or elapsed > DEAD_MAX + 1.0:
+        if current.valve < 0.3 * top or elapsed > DEAD_MAX + 1.0:
             self._dead.pop(name, None)  # abgebrochen oder unklar
             return
         if current.temp < start_temp + RISE:
@@ -426,11 +552,10 @@ class Learner:
             return None
         if open_since is not None and recent[0].time < open_since + timedelta(hours=params.d):
             return None
-        if any(s.temp is None or s.valve is None or s.valve < VALVE_OPEN for s in recent):
+        threshold = max(VALVE_OPEN * top_opening(params.curve), VALVE_MIN_GAIN)
+        if any(s.temp is None or s.valve is None or s.valve < threshold for s in recent):
             return None
         last = recent[-1]
-        if last.setpoint is not None and last.temp >= last.setpoint - 0.8:
-            return None  # Thermostat drosselt schon
         first = recent[0]
         out = self._outside_mean(first.time, last.time)
         if out is None:
@@ -440,7 +565,7 @@ class Learner:
         mean_temp = sum(s.temp for s in recent) / len(recent)
         mean_valve = sum(s.valve for s in recent) / len(recent)
         gain = (rate + params.a * (mean_temp - out)) / mean_valve
-        return gain if -2.0 < gain < 25.0 else None
+        return gain if -2.0 < gain < 60.0 else None
 
     # ----------------------------------------------------------- Heizphasen
 
@@ -455,13 +580,16 @@ class Learner:
         prior_minutes: dict[str, float],
         calibration: bool = False,
         flow: float | None = None,
+        tops: dict[str, float] | None = None,
     ) -> None:
         valves = {name: (s.valve or 0.0) for name, s in rooms.items()}
+        tops = tops or {}
+        relative = {name: v / tops.get(name, 1.0) for name, v in valves.items()}
         if flow is not None:
             # Bezug "Puffer voll": langsam vergessendes Maximum des Vorlaufs
             previous = self._flow_full if self._flow_full is not None else flow
             self._flow_full = max(flow, previous - FLOW_DECAY)
-        any_open = any(v >= VALVE_OPEN for v in valves.values())
+        any_open = any(v >= VALVE_OPEN for v in relative.values())
         episode = self._episode
         if episode is None:
             if not any_open:
@@ -486,7 +614,7 @@ class Learner:
             if 0 < since < 2:
                 self.plant.t_sum += since
                 self.plant.t_w += 1.0
-        episode["quiet"] = 0 if any(v >= 0.5 for v in valves.values()) else episode["quiet"] + 1
+        episode["quiet"] = 0 if any(v >= 0.5 for v in relative.values()) else episode["quiet"] + 1
         if episode["quiet"] >= 6 or now - episode["start"] >= MAX_EPISODE:
             self._episode = None
             self._last_episode_end = now
@@ -639,7 +767,7 @@ class Learner:
         for name in heating:
             stats = self.room_stats(name)
             b = b_values[name] if trust_model else flat_b[name]
-            if 0.1 < b < 20.0:
+            if 0.1 < b < 60.0:
                 stats.sw_b += weight
                 stats.swb_b += weight * b
                 stats.heat_windows += 1

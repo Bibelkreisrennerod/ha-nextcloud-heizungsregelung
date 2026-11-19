@@ -8,19 +8,41 @@ P=importlib.import_module("nr.physics"); L=importlib.import_module("nr.learning"
 ROOMS=["Saal","Nebenraum (groß)","Nebenraum (klein)","Ehemaliger Sonntagsschulraum","Küche","Vorraum Küche 2"]
 # Wahrheit: Saal gross, zieht 1.3 Kesselleistungen, allein ca. 4 h
 # Totzeit d: Saal 25 min (Wandthermostat weit weg von den Konvektoren), sonst 5-10 min
-TRUE={"Saal":P.RoomParams(a=0.035,b=3.2,w=1.3,d=0.42),"Nebenraum (groß)":P.RoomParams(a=0.07,b=4.0,w=0.35,d=0.15),
- "Nebenraum (klein)":P.RoomParams(a=0.08,b=5.0,w=0.25,d=0.1),"Ehemaliger Sonntagsschulraum":P.RoomParams(a=0.07,b=4.5,w=0.25,d=0.1),
- "Küche":P.RoomParams(a=0.09,b=4.0,w=0.2,d=0.08),"Vorraum Küche 2":P.RoomParams(a=0.1,b=3.5,w=0.15,d=0.08)}
+# Ventile wie gemessen (19.11.2026): jeder Heizkoerper hat eine eigene Hoechstoeffnung
+# (Saal 48 %, Nebenraum gross 83 %), am Sollwert noch gut halb offen, zu ab 0,4 K darueber,
+# voll erst 3 K unter Soll. Bewusst anders als die Startform des Modells.
+TOP={"Saal":0.48,"Nebenraum (groß)":0.83,"Nebenraum (klein)":0.7,"Ehemaliger Sonntagsschulraum":0.65,"Küche":0.75,"Vorraum Küche 2":0.6}
+def true_curve(top,zero=-0.4,at0=0.55,full=3.0):
+    pts=[]
+    for x in P.CURVE_DEV:
+        rel=0.0 if x<=zero else (at0*(x-zero)/(-zero) if x<0 else min(1.0,at0+(1-at0)*x/full))
+        pts.append(round(top*rel,4))
+    return tuple(pts)
+# b und w je Einheit Ventilstellung: bei Hoechstoeffnung wie bisher (Saal 3,2 K/h und 1,3 Kesselleistungen)
+_EFF={"Saal":(0.035,3.2,1.3,0.42),"Nebenraum (groß)":(0.07,4.0,0.35,0.15),"Nebenraum (klein)":(0.08,5.0,0.25,0.1),
+ "Ehemaliger Sonntagsschulraum":(0.07,4.5,0.25,0.1),"Küche":(0.09,4.0,0.2,0.08),"Vorraum Küche 2":(0.1,3.5,0.15,0.08)}
+TRUE={r:P.RoomParams(a=a,b=b/TOP[r],w=w/TOP[r],d=d,curve=true_curve(TOP[r])) for r,(a,b,w,d) in _EFF.items()}
+VALVE_LAG=10/60  # h: Stellmotor folgt verzoegert
+KI=0.15  # I-Anteil des Homematic-Reglers: Ventil oeffnet je Stunde und Kelvin Abweichung so viel weiter
+def pi_valve(r,setpoint,temp,integral,dt):
+    """Wahres Thermostat: Kennlinie (P-Anteil) plus I-Anteil, begrenzt auf die Hoechstoeffnung."""
+    curve=TRUE[r].curve; top=max(curve); dev=setpoint-temp
+    p=P.valve(setpoint,temp,curve)
+    if not (dev>0 and p+integral>=top): integral=min(max(integral+KI*dev*dt,0.0),top)
+    return min(max(p+integral,0.0),top), integral
 TPLANT=P.PlantParams(e_buf=0.7,t_start=0.3,p_max_kw=30)
 class World:
     def __init__(s,start):
         s.t=start; s.temps={r:14.0 for r in ROOMS}; s.set={r:14.0 for r in ROOMS}; s.state=P.PlantState(TPLANT.e_buf); s.valves={r:0.0 for r in ROOMS}
+        s.integral={r:0.0 for r in ROOMS}
         s.delays={r:P.Delay(TRUE[r].d,1/60) for r in ROOMS}
     def outside(s,t):  # Tagesgang
         h=(t.hour+t.minute/60); return 3+4*math.sin((h-9)/24*2*math.pi)
     def step(s,minutes=1):
         dt=minutes/60
-        s.valves={r:P.valve(s.set[r],s.temps[r]) for r in ROOMS}
+        for r in ROOMS:
+            target,s.integral[r]=pi_valve(r,s.set[r],s.temps[r],s.integral[r],dt)
+            s.valves[r]+=(target-s.valves[r])*min(1.0,dt/VALVE_LAG)
         D=sum(TRUE[r].w*s.valves[r] for r in ROOMS)
         sup,share=P.plant_step(D,TPLANT,s.state,dt)
         s.flow=20+50*share
