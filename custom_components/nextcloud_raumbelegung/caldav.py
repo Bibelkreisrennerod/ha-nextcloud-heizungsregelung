@@ -59,15 +59,17 @@ class RoomEvent:
     rooms: list[str] = field(default_factory=list)
     location: str = ""
     calendar: str = ""
+    description: str = ""
+    categories: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------- Auswertung
 
 
-def _unescape(value: str) -> str:
+def _unescape(value: str, newline: str = " ") -> str:
     return (
-        value.replace("\\n", " ")
-        .replace("\\N", " ")
+        value.replace("\\n", newline)
+        .replace("\\N", newline)
         .replace("\\,", ",")
         .replace("\\;", ";")
         .replace("\\\\", "\\")
@@ -112,7 +114,8 @@ def parse_events(xml_text: str, calendar_name: str = "") -> list[RoomEvent]:
         ical = re.sub(r"\n[ \t]", "", ical)  # umgebrochene Zeilen zusammenfuegen
         for block in ical.split("BEGIN:VEVENT")[1:]:
             block = block.split("END:VEVENT")[0]
-            summary = location = ""
+            summary = location = description = ""
+            categories: list[str] = []
             start = end = None
             all_day = cancelled = False
             rooms: list[str] = []
@@ -131,6 +134,13 @@ def parse_events(xml_text: str, calendar_name: str = "") -> list[RoomEvent]:
                     summary = _unescape(value).strip()
                 elif name == "LOCATION":
                     location = _unescape(value).strip()
+                elif name == "DESCRIPTION":
+                    description = _unescape(value, "\n").strip()
+                elif name == "CATEGORIES":
+                    for item in re.split(r"(?<!\\),", value):
+                        item = _unescape(item).strip()
+                        if item and item not in categories:
+                            categories.append(item)
                 elif name == "DTSTART":
                     start, all_day = _parse_time(params, value)
                 elif name == "DTEND":
@@ -147,7 +157,9 @@ def parse_events(xml_text: str, calendar_name: str = "") -> list[RoomEvent]:
             if end is None:
                 end = start + (timedelta(days=1) if all_day else timedelta(hours=1))
             events.append(
-                RoomEvent(summary, start, end, all_day, rooms, location, calendar_name)
+                RoomEvent(
+                    summary, start, end, all_day, rooms, location, calendar_name, description, categories
+                )
             )
     return events
 

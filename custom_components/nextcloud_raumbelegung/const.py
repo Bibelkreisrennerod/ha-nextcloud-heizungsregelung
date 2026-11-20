@@ -10,6 +10,7 @@ CONF_OUTSIDE_SENSOR = "outside_sensor"
 CONF_WEATHER = "weather_entity"
 CONF_DUTY_CYCLE_SENSOR = "duty_cycle_sensor"
 CONF_STOKERCLOUD = "stokercloud_name"
+CONF_TARGET_RULES = "target_rules"  # Zieltemperatur je Termin, eine Regel je Zeile
 
 DEFAULT_WEATHER = "weather.home"
 

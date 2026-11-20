@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.4.2. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.5.0. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -200,7 +200,8 @@ Vorhersagefehler, Unsicherheiten je Raum), Empfohlener Testlauf,
 Absenktemperatur (14 °C) und
 dem globalen Schalter „Automatik“ (bei neuer Einrichtung aus). In den Optionen der Integration lassen
 sich Wetter-Entität, Vorlauf-Sensor, Außentemperatur-Sensor,
-Duty-Cycle-Sensor und StokerCloud-Anlagenname wählen.
+Duty-Cycle-Sensor, StokerCloud-Anlagenname und die Regeln für die
+Zieltemperatur je Termin wählen.
 
 Lastgewicht, Lastbudget und Vorlauf-Schwelle aus Version 0.2 gibt es nicht
 mehr; die Entitäten werden beim Update entfernt.
@@ -209,6 +210,35 @@ Räume werden aus den in Nextcloud angelegten Ressourcen und aus den Terminen
 selbst übernommen. Neue Räume erscheinen automatisch. Die Attribute der
 Sensoren zeigen den laufenden oder nächsten Termin (`event`, `start`, `end`,
 `calendar`).
+
+## Zieltemperatur je Termin
+
+Ohne weitere Angabe gilt im Termin die Komforttemperatur des Raums. Einzelne
+Termine können abweichen, die erste passende Angabe gilt:
+
+1. **In der Terminbeschreibung:** `Temperatur: 21` gilt für alle gebuchten
+   Räume, `Temperatur Saal: 20` nur für den Saal. Ein Wert mit Vorzeichen
+   oder `K` ist relativ zur Komforttemperatur (`Temperatur: -1 K`).
+2. **Regeln in den Optionen der Integration** (Geräte & Dienste > Nextcloud
+   Raumbelegung > Konfigurieren), eine je Zeile:
+
+   ```
+   gottesdienst @ Saal = -1,5 K
+   jugend = 20
+   ```
+
+   Das Stichwort wird ohne Groß-/Kleinschreibung im Titel und in den
+   Nextcloud-Kategorien gesucht, „gottesdienst“ passt also auch auf
+   „Abendmahlgottesdienst“ und „Predigtgottesdienst“. `@ Raum` (mehrere mit
+   Komma) beschränkt die Regel auf diese Räume. Die erste passende Regel gilt.
+3. Sonst die **Komforttemperatur** des Raums.
+
+Laufen mehrere Termine gleichzeitig, gilt der höchste Wert. Alle Werte
+werden auf 16–24 °C begrenzt. Heizt der Plan während eines Termins schon für
+den nächsten mit höherem Ziel, gilt der höhere Wert. Welches Ziel gerade
+gilt und warum, zeigen die Attribute `zieltemperatur` und `ziel_grund` von
+„Heizbedarf“ (laufender oder nächster Termin) und „Geplanter Heizstart“
+(Termin, für den geplant wird).
 
 ## Verhalten
 

@@ -49,6 +49,8 @@ class HeatingDemand(StatusEntity, BinarySensorEntity):
         return {
             "betriebsart": status.get("mode"),
             "sollwert": status.get("desired"),
+            "zieltemperatur": status.get("target"),
+            "ziel_grund": status.get("target_source"),
             "naechster_termin": status.get("next_event"),
             "termin_beginn": _iso(status.get("next_start")),
             "geplanter_heizstart": _iso(status.get("planned_start")),

@@ -59,6 +59,7 @@ from .const import (
     CONF_FLOW_SENSOR,
     CONF_OUTSIDE_SENSOR,
     CONF_STOKERCLOUD,
+    CONF_TARGET_RULES,
     CONF_WEATHER,
     CONTROL_INTERVAL,
     DEFAULT_WEATHER,
@@ -93,6 +94,7 @@ from .planning import (
     setpoint_at,
 )
 from .stokercloud import StokerCloudClient, StokerCloudError, StokerData
+from .targets import Rule, RuleError, Target, event_target, parse_rules
 
 _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
@@ -267,6 +269,11 @@ class HeatingController:
         self._forecast_at: datetime | None = None
         self._source_failed_since: datetime | None = None
         self._first_tick = True
+        self._rules: list[Rule] = []
+        try:
+            self._rules = parse_rules(entry.options.get(CONF_TARGET_RULES))
+        except RuleError as err:  # im Optionsdialog geprueft, hier nur zur Sicherheit
+            _LOGGER.warning("Regel fuer Zieltemperatur nicht lesbar (Zeile %s: %s)", *err.args)
         name = (entry.options.get(CONF_STOKERCLOUD) or "").strip()
         self._boiler_client = (
             StokerCloudClient(async_get_clientsession(hass), name) if name else None
@@ -746,6 +753,14 @@ class HeatingController:
                 (e for e in data.events if room in e.rooms and not e.all_day and e.end > now),
                 key=lambda e: e.start,
             )
+            setting = self.setting(room, "comfort")
+            targets = [
+                event_target(room, e.summary, e.description, e.categories, setting, self._rules) for e in events
+            ]
+            running = [t for e, t in zip(events, targets) if e.start <= now]
+            following = next((t for e, t in zip(events, targets) if e.start > now), None)
+            # Ziel jetzt: laufender Termin (bei mehreren der hoechste), sonst der naechste
+            target = max(running, key=lambda t: t.value) if running else following or Target(setting, "Raum")
             infos[room] = {
                 "climates": climates,
                 "area": area_id,
@@ -758,7 +773,10 @@ class HeatingController:
                     (s := self.hass.states.get(c)) is not None and s.attributes.get("preset_mode") == "boost"
                     for c in climates
                 ),
-                "comfort": self.setting(room, "comfort"),
+                "comfort": target.value,
+                "target": target,
+                "next_target": following or target,
+                "targets": [t.value for t in targets],
                 "events": events,
                 "current": next((e for e in events if e.start <= now), None),
                 "upcoming": next((e for e in events if e.start > now), None),
@@ -1021,7 +1039,7 @@ class HeatingController:
             if not info["climates"] or info["temp"] is None:
                 continue
             state = self.rooms[room]
-            comfort = info["comfort"]
+            comfort = info["next_target"].value  # Ziel des Termins, fuer den geplant wird
             fixed = None
             calibration = self.calibration
             # gleiche Reihenfolge wie in _desired
@@ -1051,6 +1069,7 @@ class HeatingController:
                     priority=int(self.setting(room, "priority")),
                     safety=self.learner.safety(room),
                     events=[(e.start, e.end) for e in info["events"]],
+                    targets=info["targets"],
                     fixed=fixed,
                     committed=committed,
                     valve=info["valve"],
@@ -1165,10 +1184,13 @@ class HeatingController:
             state.last_command = info["target_now"]
             state.last_command_at = None
         comfort = info["comfort"]
-        if info["current"] is not None:
-            return "Termin", comfort
         room_input = self._inputs.get(room)
         plan = self._room_plan(room)
+        if info["current"] is not None:
+            # Ziel des laufenden Termins; heizt der Plan schon fuer den naechsten, der hoehere Wert
+            if room_input is not None and plan is not None and self.plan is not None:
+                return "Termin", max(comfort, setpoint_at(room_input, plan, now, self.plan.idle))
+            return "Termin", comfort
         if room_input is None or plan is None or self.plan is None:
             return "abgesenkt", setback
         desired = setpoint_at(room_input, plan, now, self.plan.idle)
@@ -1460,6 +1482,10 @@ class HeatingController:
             "reach_nominal": plan.reach_nominal if plan else None,
             "planned_late": plan.late if plan else False,
             "next_event": upcoming.summary if upcoming else None,
+            "target": info["target"].value,
+            "target_source": info["target"].label(),
+            "next_target": info["next_target"].value,
+            "next_target_source": info["next_target"].label(),
             "next_start": upcoming.start if upcoming else None,
             "climates": info["climates"],
             "area": info["area"],

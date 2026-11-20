@@ -151,19 +151,24 @@
   "options": {
     "step": {
       "init": {
-        "title": "Measurements for the control",
+        "title": "Measurements and target temperatures",
         "description": "All fields are optional. The flow temperature comes from StokerCloud or a selected sensor; without either, the buffer reserve is estimated from valve positions only. Outside temperature and forecast come from the weather entity.",
         "data": {
           "weather_entity": "Weather (forecast)",
           "flow_sensor": "Flow temperature",
           "outside_sensor": "Outside temperature (instead of weather)",
           "duty_cycle_sensor": "Access point duty cycle",
-          "stokercloud_name": "StokerCloud name (read only)"
+          "stokercloud_name": "StokerCloud name (read only)",
+          "target_rules": "Target temperature per event (rules)"
         },
         "data_description": {
-          "stokercloud_name": "Name from the public view address. No password needed."
+          "stokercloud_name": "Name from the public view address. No password needed.",
+          "target_rules": "One rule per line: \"keyword @ room = value\". The keyword is searched in the title and categories, case-insensitive. \"@ room\" is optional (several separated by commas). A value with a sign or K is relative to the comfort temperature, otherwise absolute, e.g. \"service @ Hall = -1.5 K\" or \"youth = 20\". The first matching rule wins. \"Temperatur: 21\" in the event description overrides every rule."
         }
       }
+    },
+    "error": {
+      "invalid_rule": "Rule not readable (line {line}). Format: keyword @ room = value, e.g. service @ Hall = -1.5 K"
     }
   },
   "services": {

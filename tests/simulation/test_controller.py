@@ -81,6 +81,9 @@ async def main(mode):
     global c
     stubs.NOW[0]=datetime(2026,11,18,12,0,tzinfo=timezone.utc)
     rt.coordinator.data=Data([],list(ROOMS))
+    if mode=="targets":
+        Entry.options={**Entry.options,"target_rules":"gottesdienst @ Saal = -1,5 K"}
+        c=ctl.HeatingController(hass,Entry(),rt)
     if mode=="history":
         # 3 Tage Homematic-Profil ohne Integration aufzeichnen (wie der Recorder)
         RECORD[0]=True
@@ -162,6 +165,27 @@ async def main(mode):
             hass.states["climate.saal"]=State(mode,{"current_temperature":temp,"temperature":target})
             return c._committed_after_restart({"climates":["climate.saal"],"target_now":target,"temp":temp},21.0,14.0)
         print("Zusage aus Sollwert:",{"21/17":guess(21,17),"21/20.8":guess(21,20.8),"18 Vorstufe":guess(18,16),"14":guess(14,14),"12 wartend":guess(12,13),"21 Profil":guess(21,17,"auto")})
+        return
+    if mode=="targets":
+        # Gottesdienst (Saal 19,5 per Regel, Nebenraum 21), danach Seniorenkreis mit "Temperatur: 22",
+        # Kueche mit eigener Angabe in der Beschreibung
+        day=datetime(2026,11,22,0,0,tzinfo=timezone.utc)
+        ev=[cal.RoomEvent("Predigtgottesdienst",day+timedelta(hours=9),day+timedelta(hours=10,minutes=30),False,["Saal","Nebenraum (groß)"],"","Gemeinde"),
+            cal.RoomEvent("Seniorenkreis",day+timedelta(hours=14),day+timedelta(hours=15,minutes=30),False,["Saal"],"","Gemeinde","Temperatur: 22"),
+            cal.RoomEvent("Mittagessen",day+timedelta(hours=10,minutes=30),day+timedelta(hours=12),False,["Küche"],"","Gemeinde","Temperatur Küche: 19")]
+        rt.coordinator.data=Data(ev,list(ROOMS))
+        since=stubs.NOW[0]; seen={}
+        while stubs.NOW[0]<day+timedelta(hours=16):
+            await minutes(1)
+            t=stubs.NOW[0]
+            if t==day+timedelta(hours=13,minutes=45): print("13:45 Saal",round(temps["Saal"],1),"°C")
+            if t in (day+timedelta(hours=7),day+timedelta(hours=9,minutes=30),day+timedelta(hours=10,minutes=40),day+timedelta(hours=14,minutes=30)):
+                print(t.strftime("%H:%M"),{r:(s.mode,s.desired,s.status.get("target"),s.status.get("target_source"),s.status.get("next_target")) for r,s in c.rooms.items() if r in ("Saal","Nebenraum (groß)","Küche")})
+            if day+timedelta(hours=9)<=t<day+timedelta(hours=10,minutes=30):
+                seen.setdefault("saal_gd",set()).add(c.rooms["Saal"].desired)
+        print("Sollwerte Saal im Gottesdienst:",sorted(seen.get("saal_gd",())))
+        print("Befehle:",[x for x in cmds(since) if x[2] not in ("heat",) and x[1] in ("saal","ng","kuche")])
+        print("Letzter Vorgang Saal:",{k:v for k,v in (c.history.get("Saal") or [{}])[0].items() if k in ("termin","ziel","heizstart","erreicht_um")})
         return
     # Automatik an: Sonntag Gottesdienst
     day=datetime(2026,11,22,0,0,tzinfo=timezone.utc)

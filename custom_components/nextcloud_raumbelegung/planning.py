@@ -92,6 +92,12 @@ class RoomInput:
     fixed: float | None = None  # Sollwert, der nicht geplant wird (Handverstellung, Automatik aus)
     committed: str | None = None  # laeuft schon: "pre" (Vorstufe), "main" (heizt auf Komfort), "warm" (haelt Komfort)
     valve: float | None = None  # aktuelle Ventilstellung 0..1 (Vorgeschichte fuer die Totzeit)
+    # Zieltemperatur je Termin (gleiche Reihenfolge wie events); leer = ueberall comfort.
+    # comfort selbst ist das Ziel des naechsten Termins, fuer den geplant wird.
+    targets: list[float] = field(default_factory=list)
+
+    def target(self, index: int) -> float:
+        return self.targets[index] if index < len(self.targets) else self.comfort
 
 
 @dataclass
@@ -127,18 +133,23 @@ def setpoint_at(room: RoomInput, plan: RoomPlan, moment: datetime, idle: Window 
     """Sollwert eines Raums zu einem Zeitpunkt laut Plan."""
     if room.fixed is not None:
         return room.fixed
-    for start, end in room.events:
+    # Laufender Termin: sein Ziel; das Aufheizen fuer den naechsten darf schon
+    # waehrenddessen beginnen (dann gilt der hoehere Wert).
+    level: float | None = None
+    for index, (start, end) in enumerate(room.events):
         if start <= moment < end:
-            return room.comfort
+            level = max(level or room.target(index), room.target(index))
     if plan.main is not None and plan.deadline is not None and plan.event_end is not None:
         if plan.main <= moment < plan.event_end:
-            return room.comfort
+            return max(level or room.comfort, room.comfort)
         # spaetere Termine: gleiche Vorlaufzeit wie beim geplanten
         target_start = plan.deadline + EARLY
         lead = target_start - plan.main
-        for start, end in room.events:
+        for index, (start, end) in enumerate(room.events):
             if start > target_start and start - lead <= moment < end:
-                return room.comfort
+                level = max(level or room.target(index), room.target(index))
+    if level is not None:
+        return level
     if plan.pre is not None and plan.main is not None and plan.pre <= moment < plan.main:
         return plan.pre_level if plan.pre_level is not None else room.comfort
     if idle is not None and plan.deadline is None and idle.contains(moment):
@@ -507,7 +518,10 @@ def plan_signature(rooms: list[RoomInput], now: datetime) -> tuple:
         events = tuple(
             (start, end) for start, end in room.events if end > now and start - EARLY <= now + HORIZON
         )
-        items.append((room.name, events, room.comfort, room.setback, room.priority, room.fixed))
+        targets = tuple(
+            room.target(i) for i, (start, end) in enumerate(room.events) if end > now and start - EARLY <= now + HORIZON
+        )
+        items.append((room.name, events, targets, room.comfort, room.setback, room.priority, room.fixed))
     return tuple(items)
 
 

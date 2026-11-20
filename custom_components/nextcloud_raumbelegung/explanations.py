@@ -10,7 +10,7 @@ EXPLANATIONS: dict[str, str] = {
         "Aus: Die Steuerung lässt die Thermostate dieses Raums in Ruhe, auch beim Kalibrierlauf. "
         "Wirkt nur, wenn die globale Automatik an ist."
     ),
-    "comfort": "Zieltemperatur während eines Termins. Der Raum soll sie zu Terminbeginn erreicht haben.",
+    "comfort": "Zieltemperatur während eines Termins. Der Raum soll sie zu Terminbeginn erreicht haben. Einzelne Termine können abweichen: „Temperatur: 21“ in der Terminbeschreibung oder eine Regel in den Optionen der Integration (z. B. „gottesdienst @ Saal = -1,5 K“).",
     "preheat": (
         "Schätzung, wie lange der Raum allein von 14 auf 21 °C braucht (bei 0 °C aussen). "
         "Nur Startannahme: Sobald der Raum in einer Modellanpassung war, gelten die gelernten Werte."
@@ -20,7 +20,7 @@ EXPLANATIONS: dict[str, str] = {
         "Zahl zuerst warm; Räume mit größerer Zahl müssen notfalls warten."
     ),
     # Raum: Zustand und Plan
-    "heating_demand": "An, solange die Steuerung den Raum aufheizt oder warm hält (Komfort-Sollwert).",
+    "heating_demand": "An, solange die Steuerung den Raum aufheizt oder warm hält (Komfort-Sollwert). Attribut „zieltemperatur“: Ziel des laufenden oder nächsten Termins, „ziel_grund“ sagt, woher es kommt (Regel, Angabe im Termin oder Komforttemperatur des Raums).",
     "occupied": "An während eines Termins im Nextcloud-Kalender, der diesen Raum belegt.",
     "room_temperature": "Gemessene Raumtemperatur, gemittelt über die Heizgruppen des Raums.",
     "setpoint": "Sollwert, den die Steuerung gerade für diesen Raum vorsieht (Komfort, Vorstufe oder Absenkung).",
@@ -35,7 +35,7 @@ EXPLANATIONS: dict[str, str] = {
         "Leer, solange nichts geplant ist (z. B. Automatik aus). Attribut allein_bestfall_min: wie lange der "
         "Raum jetzt allein bei vollem Puffer bis zur Komforttemperatur bräuchte, ohne Zuschlag."
     ),
-    "planned_start": "Zeitpunkt, zu dem laut Plan das Aufheizen beginnt (Vorstufe oder Komfort).",
+    "planned_start": "Zeitpunkt, zu dem laut Plan das Aufheizen beginnt (Vorstufe oder Komfort). Attribut „zieltemperatur“: Ziel des Termins, für den geplant wird.",
     "warm_at": "Zeitpunkt, zu dem der Raum laut Plan die Komforttemperatur erreicht (bis 0,5 K darunter).",
     "protocol": "Die letzten Heizvorgänge: Beginn, wann warm, Vorhersage und Abweichung zur Frist.",
     # Raum: gelernte Werte

@@ -116,6 +116,8 @@ class PlannedStartSensor(StatusEntity, SensorEntity):
             "komfort_ab": _iso(status.get("main_start")),
             "frist": _iso(status.get("deadline")),
             "knapp": status.get("planned_late", False),
+            "zieltemperatur": status.get("next_target"),
+            "ziel_grund": status.get("next_target_source"),
         }
 
 

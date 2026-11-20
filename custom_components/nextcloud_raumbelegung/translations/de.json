@@ -155,19 +155,24 @@
   "options": {
     "step": {
       "init": {
-        "title": "Messwerte für die Steuerung",
+        "title": "Messwerte und Zieltemperaturen",
         "description": "Alle Angaben sind optional. Die Vorlauftemperatur kommt aus StokerCloud oder einem gewählten Sensor; ohne beides schätzt die Steuerung die Pufferreserve nur aus den Ventilstellungen. Die Außentemperatur und die Prognose kommen aus der Wetter-Entität, der Duty Cycle wird bei Homematic IP automatisch gefunden.",
         "data": {
           "weather_entity": "Wetter (Prognose)",
           "flow_sensor": "Vorlauftemperatur",
           "outside_sensor": "Außentemperatur (statt Wetter)",
           "duty_cycle_sensor": "Duty Cycle Access Point",
-          "stokercloud_name": "StokerCloud-Anlagenname (nur lesen)"
+          "stokercloud_name": "StokerCloud-Anlagenname (nur lesen)",
+          "target_rules": "Zieltemperatur je Termin (Regeln)"
         },
         "data_description": {
-          "stokercloud_name": "Name aus der Adresse der öffentlichen Ansicht, z. B. „nawatec“ bei stokercloud.dk/dev/nawatec.html. Kein Passwort nötig. Ein gewählter Vorlauf-Sensor hat Vorrang."
+          "stokercloud_name": "Name aus der Adresse der öffentlichen Ansicht, z. B. „nawatec“ bei stokercloud.dk/dev/nawatec.html. Kein Passwort nötig. Ein gewählter Vorlauf-Sensor hat Vorrang.",
+          "target_rules": "Eine Regel je Zeile: „Stichwort @ Raum = Wert“. Das Stichwort wird im Titel und in den Kategorien gesucht, Groß-/Kleinschreibung egal. „@ Raum“ ist optional (mehrere mit Komma). Wert mit Vorzeichen oder K ist relativ zur Komforttemperatur, sonst absolut, z. B. „gottesdienst @ Saal = -1,5 K“ oder „jugend = 20“. Die erste passende Regel gilt. „Temperatur: 21“ in der Terminbeschreibung geht jeder Regel vor."
         }
       }
+    },
+    "error": {
+      "invalid_rule": "Regel nicht lesbar (Zeile {line}). Form: Stichwort @ Raum = Wert, z. B. gottesdienst @ Saal = -1,5 K"
     }
   },
   "services": {

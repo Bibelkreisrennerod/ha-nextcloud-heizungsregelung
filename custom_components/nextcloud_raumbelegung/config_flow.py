@@ -25,10 +25,12 @@ from homeassistant.helpers.selector import (
 )
 
 from .caldav import NextcloudAuthError, NextcloudClient, NextcloudError
+from .targets import RuleError, parse_rules
 from .const import (
     CONF_CALENDARS,
     CONF_DUTY_CYCLE_SENSOR,
     CONF_STOKERCLOUD,
+    CONF_TARGET_RULES,
     CONF_FLOW_SENSOR,
     CONF_OUTSIDE_SENSOR,
     CONF_WEATHER,
@@ -139,12 +141,20 @@ class NextcloudRoomsConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class NextcloudRoomsOptionsFlow(OptionsFlow):
-    """Messwerte fuer die Steuerung: Vorlauf, Aussentemperatur, Wetter, Duty Cycle."""
+    """Messwerte fuer die Steuerung und Regeln fuer die Zieltemperatur je Termin."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
+        placeholders = {"line": ""}
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
-        options = self.config_entry.options
+            try:
+                parse_rules(user_input.get(CONF_TARGET_RULES))
+            except RuleError as err:
+                errors[CONF_TARGET_RULES] = "invalid_rule"
+                placeholders["line"] = f"{err.args[0]}: {err.args[1]}"
+            else:
+                return self.async_create_entry(data=user_input)
+        options = user_input if user_input is not None else self.config_entry.options
         sensor = EntitySelector(EntitySelectorConfig(domain="sensor"))
         schema = vol.Schema(
             {
@@ -155,8 +165,12 @@ class NextcloudRoomsOptionsFlow(OptionsFlow):
                 vol.Optional(CONF_FLOW_SENSOR): sensor,
                 vol.Optional(CONF_OUTSIDE_SENSOR): sensor,
                 vol.Optional(CONF_DUTY_CYCLE_SENSOR): sensor,
+                vol.Optional(CONF_TARGET_RULES): TextSelector(TextSelectorConfig(multiline=True)),
             }
         )
         return self.async_show_form(
-            step_id="init", data_schema=self.add_suggested_values_to_schema(schema, options)
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(schema, options),
+            errors=errors,
+            description_placeholders=placeholders,
         )
