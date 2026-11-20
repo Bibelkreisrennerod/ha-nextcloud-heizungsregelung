@@ -33,6 +33,7 @@ class RoomSeries:
     temps: list[Series] = field(default_factory=list)  # je Heizgruppe: Raumtemperatur
     targets: list[Series] = field(default_factory=list)  # je Heizgruppe: Sollwert
     valves: list[Series] = field(default_factory=list)  # je Ventilsensor: Stellung in %
+    boosts: list[Series] = field(default_factory=list)  # je Heizgruppe: 1 = Boost aktiv
 
 
 @dataclass
@@ -90,6 +91,7 @@ def replay(
             [_Cursor(s) for s in series.temps],
             [_Cursor(s) for s in series.targets],
             [_Cursor(s) for s in series.valves],
+            [_Cursor(s) for s in series.boosts],
         )
         for name, series in rooms.items()
     }
@@ -103,7 +105,7 @@ def replay(
     while moment <= end:
         samples: dict[str, RoomSample] = {}
         demand = 0.0
-        for name, (temps, targets, valves) in cursors.items():
+        for name, (temps, targets, valves, boosts) in cursors.items():
             temp = _mean([c.at(moment) for c in temps])
             target = _mean([c.at(moment) for c in targets])
             if temp is None:
@@ -114,7 +116,8 @@ def replay(
                 opening = min(max(opening / 100.0, 0.0), 1.0)
             elif target is not None:
                 opening = valve(target, temp, learner.curve(name))
-            samples[name] = RoomSample(moment, temp, opening, target, measured=measured)
+            forced = any((c.at(moment) or 0.0) > 0.5 for c in boosts)
+            samples[name] = RoomSample(moment, temp, opening, target, measured=measured, forced=forced)
             demand += learner.room_params(name, prior_minutes.get(name, 120.0)).w * (opening or 0.0)
         gauge.e = min(gauge.e, plant.e_buf)
         _, share = plant_step(demand, plant, gauge, hours)

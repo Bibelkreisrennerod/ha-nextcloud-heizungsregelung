@@ -42,6 +42,7 @@ Ventilstellung (1.0 = 100 %), wie sie die Thermostate melden.
 from __future__ import annotations
 
 from bisect import bisect_right
+import math
 from collections import deque
 from dataclasses import dataclass
 from functools import lru_cache
@@ -72,6 +73,10 @@ class RoomParams:
     b: float = 2.0  # K/h
     w: float = 0.3  # Anteil der Kessel-Dauerleistung
     d: float = 0.15  # Totzeit in h (9 min)
+    # Traegheit der Heizkoerper in h: Wasser und Stahl speichern Waerme, sie
+    # kommt verzoegert an und wirkt nach dem Schliessen noch nach (Saal am
+    # 20.11.2026 gemessen: etwa 35 min, dazu 10 min Totzeit)
+    tau: float = 0.0
     # Ventilstellung 0..1 an den Stuetzstellen CURVE_DEV; None = PRIOR_SHAPE
     curve: tuple[float, ...] | None = None
 
@@ -176,24 +181,29 @@ def plant_step(
 
 
 class Delay:
-    """Totzeit: gibt den Wert zurueck, der vor 'dead' Stunden hineinging.
+    """Weg der Waerme vom Ventil in den Raum: Totzeit, dann Traegheit.
 
-    Liegt die Totzeit zwischen zwei Schritten, wird zwischen ihnen
-    interpoliert. Vor dem ersten Schritt gilt 'initial' als Vorgeschichte
-    (0 = Ventile waren zu).
+    Totzeit: gibt den Wert zurueck, der vor 'dead' Stunden hineinging; liegt
+    sie zwischen zwei Schritten, wird interpoliert. Traegheit (lag, Stunden):
+    Verzoegerung erster Ordnung der Heizkoerper. Vor dem ersten Schritt gilt
+    'initial' als Vorgeschichte (0 = Ventile waren zu).
     """
 
-    def __init__(self, dead: float, dt: float, initial: float = 0.0) -> None:
+    def __init__(self, dead: float, dt: float, initial: float = 0.0, lag: float = 0.0) -> None:
         steps = max(dead, 0.0) / dt if dt > 0 else 0.0
         self._whole = int(steps)
         self._part = steps - self._whole
         self._history: deque[float] = deque([initial] * (self._whole + 2), maxlen=self._whole + 2)
+        self._factor = 1.0 - math.exp(-dt / lag) if lag > 1e-6 and dt > 0 else 1.0
+        self._state = initial
 
     def push(self, value: float) -> float:
         self._history.append(value)
         newer = self._history[-1 - self._whole]
         older = self._history[-2 - self._whole]
-        return (1.0 - self._part) * newer + self._part * older
+        delayed = (1.0 - self._part) * newer + self._part * older
+        self._state += (delayed - self._state) * self._factor
+        return self._state
 
 
 def room_step(temp: float, params: RoomParams, supply: float, outside: float, dt: float) -> float:
@@ -212,7 +222,7 @@ def solo_minutes(
     """Aufheizdauer eines Raums, der allein heizt (voller Puffer), in Minuten."""
     state = PlantState(plant.e_buf)
     temp, minutes, dt = t_from, 0.0, 5 / 60
-    delay = Delay(params.d, dt)
+    delay = Delay(params.d, dt, lag=params.tau)
     while temp < t_to - REACH_TOLERANCE and minutes < limit:
         opening = valve(t_to, temp, params.curve, hold_opening(params, temp, outside))
         _, share = plant_step(params.w * opening, plant, state, dt)
@@ -223,13 +233,20 @@ def solo_minutes(
 
 @lru_cache(maxsize=256)
 def _b_for(
-    minutes: float, a: float, w: float, e_buf: float, t_start: float, d: float, curve: tuple[float, ...] | None
+    minutes: float,
+    a: float,
+    w: float,
+    e_buf: float,
+    t_start: float,
+    d: float,
+    curve: tuple[float, ...] | None,
+    tau: float = 0.0,
 ) -> float:
     plant = PlantParams(e_buf=e_buf, t_start=t_start)
     low, high = 0.05, 200.0
     for _ in range(40):
         mid = (low + high) / 2
-        if solo_minutes(RoomParams(a=a, b=mid, w=w, d=d, curve=curve), plant, limit=minutes + 60) > minutes:
+        if solo_minutes(RoomParams(a=a, b=mid, w=w, d=d, curve=curve, tau=tau), plant, limit=minutes + 60) > minutes:
             low = mid
         else:
             high = mid
@@ -243,6 +260,7 @@ def b_for_minutes(
     plant: PlantParams | None = None,
     d: float = 0.0,
     curve: tuple[float, ...] | None = None,
+    tau: float = 0.0,
 ) -> float:
     """Aufheizrate b, mit der ein Raum allein in 'minutes' von 14 auf 21 Grad
     kommt (bei 0 Grad aussen, voller Puffer, mit Kessel- und Pufferbegrenzung).
@@ -260,4 +278,5 @@ def b_for_minutes(
         round(plant.t_start, 2),
         round(min(d, minutes / 60 / 2), 2),
         tuple(round(v * 20) / 20 for v in curve) if curve else None,  # grob, damit der Cache greift
+        round(tau, 2),
     )

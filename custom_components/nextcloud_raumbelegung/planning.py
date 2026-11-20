@@ -170,10 +170,10 @@ def simulate(
     params = [
         # vorsichtig = jeder Raum reagiert um den Sicherheitsfaktor langsamer
         # (Aufheizen, Auskuehlen, Totzeit), Aufheizdauern also um diesen Faktor laenger
-        replace(r.params, a=r.params.a / factor, b=r.params.b / factor, d=r.params.d * factor)
+        replace(r.params, a=r.params.a / factor, b=r.params.b / factor, d=r.params.d * factor, tau=r.params.tau * factor)
         for r, factor in ((r, r.safety if cautious else 1.0) for r in rooms)
     ]
-    delays = [Delay(p.d, STEP_H, r.valve or 0.0) for r, p in zip(rooms, params)]
+    delays = [Delay(p.d, STEP_H, r.valve or 0.0, p.tau) for r, p in zip(rooms, params)]
     reach: dict[str, datetime | None] = {r.name: None for r in rooms}
     peak = {r.name: r.temp for r in rooms}
     energy = 0.0

@@ -78,6 +78,9 @@ CURVE_RISE = 1.0  # K: Sollwertsprung, ab dem ein Aufheizvorgang beginnt
 CURVE_AFTER = timedelta(minutes=30)  # nach Erreichen des Sollwerts noch so lange mitschreiben
 CURVE_MIN = 3.0  # Messpunkte, ab denen eine Stuetzstelle als gemessen gilt
 LAMBDA_C = 1.0  # Startwert der Kennlinie zaehlt wie ein Messpunkt
+# Startwert Traegheit der Heizkoerper (h); Saal am 20.11.2026 gemessen 0,58 h,
+# kleinere Heizkoerper reagieren schneller. Die gemeinsame Anpassung lernt sie je Raum.
+PRIOR_TAU = 0.3
 
 PRIOR_A = 0.05
 PRIOR_W_SINGLE = 0.3  # Raum mit einem Thermostat
@@ -125,6 +128,7 @@ class RoomSample:
     valve: float | None  # 0..1
     setpoint: float | None
     measured: bool = True  # Ventilstellung gemessen (nicht aus Soll/Ist geschaetzt)
+    forced: bool = False  # Boost: Ventil fest geoeffnet, nicht vom Regler bestimmt
 
 
 @dataclass
@@ -268,7 +272,7 @@ class Learner:
         if not all(k in values for k in keys):
             return None
         a, b, d, w = (values[k] for k in keys)
-        return RoomParams(a=a, b=b, w=w, d=d)
+        return RoomParams(a=a, b=b, w=w, d=d, tau=values.get(f"{room}|tau", PRIOR_TAU))
 
     def _single_params(self, room: str, prior_minutes: float) -> RoomParams:
         """Werte aus den Einzelschaetzungen (Fenster je Groesse); Vorwissen der ersten Anpassung."""
@@ -280,10 +284,10 @@ class Learner:
         d = (stats.swd_d + LAMBDA_D * PRIOR_D) / (stats.sw_d + LAMBDA_D)
         d = min(max(d, 0.0), DEAD_MAX)
         curve = self.curve(room)
-        b0 = b_for_minutes(prior_minutes, a, w, self.plant_params(PlantParams()), d, curve)
+        b0 = b_for_minutes(prior_minutes, a, w, self.plant_params(PlantParams()), d, curve, PRIOR_TAU)
         b = (stats.swb_b + LAMBDA_B * b0) / (stats.sw_b + LAMBDA_B)
         b = min(max(b, 0.1), 60.0)
-        return RoomParams(a=a, b=b, w=w, d=d, curve=curve)
+        return RoomParams(a=a, b=b, w=w, d=d, curve=curve, tau=PRIOR_TAU)
 
     def curve(self, room: str) -> tuple[float, ...]:
         """Gelernte Ventilkennlinie (Ventilstellung 0..1 an den Stuetzstellen CURVE_DEV).
@@ -481,7 +485,7 @@ class Learner:
     def sigma(self, room: str) -> dict[str, float] | None:
         """Unsicherheit der angepassten Werte eines Raums (log bzw. Stunden bei d)."""
         values = (self.fit_state or {}).get("sigma") or {}
-        result = {k: values[f"{room}|{k}"] for k in ("a", "b", "d", "w") if f"{room}|{k}" in values}
+        result = {k: values[f"{room}|{k}"] for k in ("a", "b", "d", "tau", "w") if f"{room}|{k}" in values}
         return result or None
 
     @property
@@ -505,7 +509,7 @@ class Learner:
         prior_mean: dict[estimation.Name, float] = {}
         for room in names:
             params = self.room_params(room, prior_minutes.get(room, 120.0))
-            for key in ("a", "b", "d", "w"):
+            for key in ("a", "b", "d", "tau", "w"):
                 prior_mean[(room, key)] = getattr(params, key)
         prior_mean[(None, "e_buf")] = self.plant_params(plant_base).e_buf
         prior_info = None
@@ -538,6 +542,7 @@ class Learner:
                 b=result.values[(room, "b")],
                 w=result.values[(room, "w")],
                 d=result.values[(room, "d")],
+                tau=result.values[(room, "tau")],
                 curve=curves[room],
             )
             spread[room] = round(
@@ -552,6 +557,7 @@ class Learner:
                 b=result.values[(room, "b")],
                 w=result.values[(room, "w")],
                 d=result.values[(room, "d")],
+                tau=result.values[(room, "tau")],
                 curve=curves[room],
             )
             for room in curves
@@ -607,7 +613,7 @@ class Learner:
         if reached is None and sample.temp >= setpoint:
             reached = now
             self._setpoint[name] = (setpoint, since, rising, reached)
-        if not rising or not sample.measured or now - since < CURVE_SETTLE:
+        if not rising or not sample.measured or sample.forced or now - since < CURVE_SETTLE:
             return
         if reached is not None and now - reached > CURVE_AFTER:
             return
@@ -633,7 +639,7 @@ class Learner:
         hours = SAMPLE.total_seconds() / 3600
         first = track[0]
         temp = first[0]
-        delay = Delay(params.d, hours, first[1] * first[3])
+        delay = Delay(params.d, hours, first[1] * first[3], params.tau)
         for t, v, o, s in list(track)[:-1]:
             temp = room_step(temp, params, delay.push(v * s), o, hours)
         error = abs(temp - track[-1][0])
@@ -683,7 +689,7 @@ class Learner:
         if len(window) < 2:
             return
         previous, current = window[-2], window[-1]
-        if current.temp is None or current.valve is None:
+        if current.temp is None or current.valve is None or current.forced:
             self._dead.pop(name, None)
             return
         pending = self._dead.get(name)
@@ -726,8 +732,10 @@ class Learner:
         recent = list(window)[-(HEAT_WINDOW + 1):]
         if len(recent) < HEAT_WINDOW + 1:
             return None
-        if open_since is not None and recent[0].time < open_since + timedelta(hours=params.d):
+        if open_since is not None and recent[0].time < open_since + timedelta(hours=params.d + params.tau):
             return None
+        if any(s.forced for s in recent):
+            return None  # Boost: Ventil fest offen, Waerme kommt erst verzoegert an
         threshold = max(VALVE_OPEN * top_opening(params.curve), VALVE_MIN_GAIN)
         if any(s.temp is None or s.valve is None or s.valve < threshold for s in recent):
             return None

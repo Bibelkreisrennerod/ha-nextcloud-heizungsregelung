@@ -5,8 +5,8 @@ Gleichungen kommen aus der Physik (physics.py), die Zahlen aus den Messungen.
 Gesucht werden die Werte, mit denen das Modell die gemessenen Verlaeufe am
 besten nachrechnet:
 
-- Je Raum Auskuehlrate a, Aufheizrate b, Totzeit d und Leistungsbedarf w,
-  fuer die Anlage die Pufferreserve.
+- Je Raum Auskuehlrate a, Aufheizrate b, Totzeit d, Traegheit der
+  Heizkoerper tau und Leistungsbedarf w, fuer die Anlage die Pufferreserve.
 - Nachgerechnet wird aus jedem Messpunkt (alle 30 min) 30, 60 und 120 min
   voraus, mit den gemessenen Ventilstellungen. Das ist genau die Vorhersage,
   die die Planung braucht.
@@ -37,6 +37,7 @@ from .physics import Delay, PlantParams, PlantState, RoomParams, hold_opening, p
 STEP_H = 5 / 60  # Abstand der Messpunkte (h)
 HORIZONS = (6, 12, 24)  # Messpunkte voraus: 30, 60, 120 min
 START_EVERY = 6  # alle 30 min ein Vorhersagestart
+WARMUP = 18  # Messpunkte Vorgeschichte (90 min) fuer Totzeit und Traegheit
 SIGMA_ASSUMED = 0.2  # K, Massstab der Residuen waehrend der Anpassung
 SIGMA_MIN = 0.15  # K, so genau kann ein Modell die Raumtemperatur hoechstens treffen
 CORRELATION = 6.0  # ueberlappende Vorhersagen sind nicht unabhaengig: Information so viel kleiner
@@ -45,16 +46,19 @@ MAX_ITER = 15
 DAY_FORGET = 0.944  # Vorwissen behaelt je Tag so viel Gewicht (wie DECAY je 5 min)
 
 # Breite des Vorwissens bei der ersten Anpassung (Logarithmus bzw. Stunden)
-PRIOR_SIGMA = {"a": 0.7, "b": 0.3, "d": 0.15, "w": 0.7, "e_buf": 0.7}
-LOG_KEYS = {"a", "b", "w", "e_buf"}
+PRIOR_SIGMA = {"a": 0.7, "b": 0.3, "d": 0.15, "tau": 0.7, "w": 0.7, "e_buf": 0.7}
+LOG_KEYS = {"a", "b", "tau", "w", "e_buf"}
+ROOM_KEYS = ("a", "b", "d", "tau", "w")
+LOCAL_KEYS = ("a", "b", "d", "tau")  # wirken nur auf den eigenen Raum
 BOUNDS = {
     "a": (math.log(0.005), math.log(0.5)),
     "b": (math.log(0.1), math.log(60.0)),
     "d": (0.0, 1.5),
+    "tau": (math.log(0.02), math.log(2.0)),
     "w": (math.log(0.02), math.log(10.0)),
     "e_buf": (math.log(0.05), math.log(5.0)),
 }
-STEPS = {"a": 0.02, "b": 0.02, "d": 0.03, "w": 0.03, "e_buf": 0.03}  # fuer die numerische Ableitung
+STEPS = {"a": 0.02, "b": 0.02, "d": 0.03, "tau": 0.05, "w": 0.03, "e_buf": 0.03}  # fuer die numerische Ableitung
 
 Name = tuple[str | None, str]  # (Raum oder None fuer die Anlage, Groesse)
 
@@ -205,7 +209,11 @@ class _Model:
         rooms = {}
         for room in self.rooms:
             rooms[room] = RoomParams(
-                a=values[(room, "a")], b=values[(room, "b")], w=values[(room, "w")], d=values[(room, "d")]
+                a=values[(room, "a")],
+                b=values[(room, "b")],
+                w=values[(room, "w")],
+                d=values[(room, "d")],
+                tau=values[(room, "tau")],
             )
         return rooms, values[(None, "e_buf")]
 
@@ -233,7 +241,15 @@ class _Model:
             if temps[s] is None or self.outside[s] is None or valves[s] is None:
                 continue
             temp = temps[s]
-            delay = Delay(params.d, STEP_H, valves[s] * shares[s])
+            # Totzeit und Traegheit mit der Vorgeschichte fuellen (bis WARMUP
+            # Messpunkte zurueck), sonst saehe ein gerade geoeffnetes Ventil so
+            # aus, als liefe die Waerme schon lange
+            first = s
+            while first > 0 and s - first < WARMUP and (first not in self.breaks) and valves[first - 1] is not None:
+                first -= 1
+            delay = Delay(params.d, STEP_H, valves[first] * shares[first], params.tau)
+            for i in range(first, s):
+                delay.push(valves[i] * shares[i])
             for k in range(1, last + 1):
                 i = s + k - 1
                 if i + 1 >= n or (i + 1) in self.breaks:
@@ -271,7 +287,7 @@ class _Model:
             h = STEPS[key]
             shifted = vector[:]
             shifted[index] += h
-            if room is not None and key in ("a", "b", "d"):
+            if room is not None and key in LOCAL_KEYS:
                 params = replace(rooms[room], **{key: _to_natural(key, shifted[index])})
                 new = self.room_residuals(room, params, shares)
                 columns.append({room: [(x - y) / h for x, y in zip(new, base[room])]})
@@ -318,7 +334,7 @@ def fit(data: FitInput) -> FitResult | None:
     )
     if not rooms:
         return None
-    names: list[Name] = [(room, key) for room in rooms for key in ("a", "b", "d", "w")] + [(None, "e_buf")]
+    names: list[Name] = [(room, key) for room in rooms for key in ROOM_KEYS] + [(None, "e_buf")]
     n = len(names)
     prior = [_clamp(k, _to_internal(k, data.prior_mean[(r, k)])) for r, k in names]
     info = [[0.0] * n for _ in range(n)]
@@ -432,7 +448,7 @@ def _simulate_run(
     """Testlauf im Modell: Temperaturen alle 15 min, Dauer bis alle warm (h)."""
     state = PlantState(plant.e_buf)
     temps = {r: start for r in rooms}
-    delays = {r: Delay(p.d, STEP_H, 0.0) for r, p in rooms.items()}
+    delays = {r: Delay(p.d, STEP_H, 0.0, p.tau) for r, p in rooms.items()}
     out: dict[str, list[float]] = {r: [] for r in rooms}
     done = None
     steps = int(hours / STEP_H)
@@ -483,7 +499,12 @@ def rank_experiments(
         values = {name: _to_natural(name[1], v) for name, v in zip(names, vec)}
         rooms = {
             r: RoomParams(
-                a=values[(r, "a")], b=values[(r, "b")], w=values[(r, "w")], d=values[(r, "d")], curve=curves.get(r)
+                a=values[(r, "a")],
+                b=values[(r, "b")],
+                w=values[(r, "w")],
+                d=values[(r, "d")],
+                tau=values[(r, "tau")],
+                curve=curves.get(r),
             )
             for r in room_names
         }
@@ -553,7 +574,7 @@ def duration_uncertainty(result: FitResult, room: str, base: RoomParams, plant: 
 
     minutes(params) -> Aufheizdauer allein in Minuten.
     """
-    keys = [k for k in ("a", "b", "d") if (room, k) in result.values]
+    keys = [k for k in LOCAL_KEYS if (room, k) in result.values]
     index = {name: i for i, name in enumerate(result.names)}
     reference = minutes(base)
     if reference <= 0:

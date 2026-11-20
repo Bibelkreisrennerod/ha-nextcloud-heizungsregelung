@@ -753,6 +753,11 @@ class HeatingController:
                 "target_now": target_now,
                 "valve": self._valve_reading(room, valve_sensors, target_now, temp),
                 "valve_count": len(valve_sensors),
+                # Boost am Thermostat: Ventil fest offen (meist 80 %), Sollwert unveraendert
+                "boost": any(
+                    (s := self.hass.states.get(c)) is not None and s.attributes.get("preset_mode") == "boost"
+                    for c in climates
+                ),
                 "comfort": self.setting(room, "comfort"),
                 "events": events,
                 "current": next((e for e in events if e.start <= now), None),
@@ -807,7 +812,12 @@ class HeatingController:
             stats = self.learner.room_stats(room)
             stats.valves = max(1, info["valve_count"])
             samples[room] = RoomSample(
-                now, info["temp"], info["valve"], info["target_now"], measured=info["valve_count"] > 0
+                now,
+                info["temp"],
+                info["valve"],
+                info["target_now"],
+                measured=info["valve_count"] > 0,
+                forced=info["boost"],
             )
             prior[room] = self.setting(room, "preheat")
             demand += self.room_params(room).w * (info["valve"] or 0.0)
@@ -945,11 +955,18 @@ class HeatingController:
                     result.append((state.last_updated, value))
                 return result
 
+            def boost_series(entity_id: str) -> Series:
+                return [
+                    (state.last_updated, 1.0 if state.attributes.get("preset_mode") == "boost" else 0.0)
+                    for state in (states or {}).get(entity_id, [])
+                ]
+
             rooms = {
                 room: RoomSeries(
                     temps=[series(c, "current_temperature") for c in climates],
                     targets=[series(c, "temperature") for c in climates],
                     valves=[series(v) for v in valves],
+                    boosts=[boost_series(c) for c in climates],
                 )
                 for room, (climates, valves) in sources.items()
             }
@@ -1198,8 +1215,8 @@ class HeatingController:
         """Sollwert senden, wenn noetig. Erkennt Handverstellungen."""
         desired = round(desired * 2) / 2  # Homematic kennt nur halbe Grad
         current = info["target_now"]
-        if current is None:
-            return
+        if current is None or info.get("boost"):
+            return  # waehrend eines Boosts nichts senden, er endet von selbst
         if abs(current - desired) < SETPOINT_TOLERANCE:
             return
         ours = state.last_command is not None and abs(current - state.last_command) < SETPOINT_TOLERANCE
@@ -1444,6 +1461,8 @@ class HeatingController:
             "b": params.b,
             "w": params.w,
             "d": params.d,
+            "tau": params.tau,
+            "boost": info.get("boost", False),
             "sigma": self.learner.sigma(room),
             "curve": params.curve,
             "curve_points": self.learner.curve_points(room),
@@ -1481,6 +1500,7 @@ class HeatingController:
                 "auskuehlrate_prozent": percent(f"{room}|a"),
                 "aufheizrate_prozent": percent(f"{room}|b"),
                 "totzeit_min": None if d is None else round(d * 60),
+                "traegheit_prozent": percent(f"{room}|tau"),
                 "leistungsbedarf_prozent": percent(f"{room}|w"),
                 "aufheizdauer_prozent": round(100 * (fit.get("duration_sigma") or {}).get(room, 0.0)),
             }

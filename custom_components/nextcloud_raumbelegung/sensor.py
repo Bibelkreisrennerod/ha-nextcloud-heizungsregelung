@@ -303,9 +303,13 @@ class DeadTimeSensor(StatusEntity, SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         sigma = (self._status.get("sigma") or {}).get("d")
+        tau = self._status.get("tau")
         return {
             "gemessene_heizbeginne": self._status.get("dead_events"),
             "unsicherheit_min": None if sigma is None else round(sigma * 60),
+            # Traegheit der Heizkoerper: Waerme kommt danach verzoegert an und wirkt nach
+            "traegheit_min": None if tau is None else round(tau * 60),
+            "traegheit_unsicherheit_prozent": _spread(self._status, "tau"),
         }
 
 

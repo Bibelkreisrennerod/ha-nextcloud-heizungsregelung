@@ -21,7 +21,10 @@ def true_curve(top,zero=-0.4,at0=0.55,full=3.0):
 # b und w je Einheit Ventilstellung: bei Hoechstoeffnung wie bisher (Saal 3,2 K/h und 1,3 Kesselleistungen)
 _EFF={"Saal":(0.035,3.2,1.3,0.42),"Nebenraum (groß)":(0.07,4.0,0.35,0.15),"Nebenraum (klein)":(0.08,5.0,0.25,0.1),
  "Ehemaliger Sonntagsschulraum":(0.07,4.5,0.25,0.1),"Küche":(0.09,4.0,0.2,0.08),"Vorraum Küche 2":(0.1,3.5,0.15,0.08)}
-TRUE={r:P.RoomParams(a=a,b=b/TOP[r],w=w/TOP[r],d=d,curve=true_curve(TOP[r])) for r,(a,b,w,d) in _EFF.items()}
+# Traegheit der Heizkoerper (h): Saal wie am 20.11.2026 gemessen (Boost: 10 min Totzeit, 35 min Traegheit)
+_TAU={"Saal":0.58,"Nebenraum (groß)":0.3,"Nebenraum (klein)":0.25,"Ehemaliger Sonntagsschulraum":0.25,"Küche":0.2,"Vorraum Küche 2":0.2}
+_EFF["Saal"]=(0.035,3.2,1.3,0.17)
+TRUE={r:P.RoomParams(a=a,b=b/TOP[r],w=w/TOP[r],d=d,curve=true_curve(TOP[r]),tau=_TAU[r]) for r,(a,b,w,d) in _EFF.items()}
 VALVE_LAG=10/60  # h: Stellmotor folgt verzoegert
 KI=0.15  # I-Anteil des Homematic-Reglers: Ventil oeffnet je Stunde und Kelvin Abweichung so viel weiter
 def pi_valve(r,setpoint,temp,integral,dt):
@@ -35,7 +38,7 @@ class World:
     def __init__(s,start):
         s.t=start; s.temps={r:14.0 for r in ROOMS}; s.set={r:14.0 for r in ROOMS}; s.state=P.PlantState(TPLANT.e_buf); s.valves={r:0.0 for r in ROOMS}
         s.integral={r:0.0 for r in ROOMS}
-        s.delays={r:P.Delay(TRUE[r].d,1/60) for r in ROOMS}
+        s.delays={r:P.Delay(TRUE[r].d,1/60,lag=TRUE[r].tau) for r in ROOMS}
     def outside(s,t):  # Tagesgang
         h=(t.hour+t.minute/60); return 3+4*math.sin((h-9)/24*2*math.pi)
     def step(s,minutes=1):

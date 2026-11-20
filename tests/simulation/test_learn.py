@@ -40,8 +40,10 @@ def do_fit(title):
         t=TRUE[r]
         def f(k,scale=1.0,unit=""):
             val=v[f"{r}|{k}"]*scale; tru=getattr(t,k)*scale; sd=sg[f"{r}|{k}"]
-            return f"{k} {val:.3g}/{tru:.3g} ±{sd*60:.0f}min" if k=="d" else f"{k} {val:.3g}/{tru:.3g} ±{sd*100:.0f}%"
-        print(f"  {r[:18]:18} "+"  ".join(f(k) for k in ("a","b","d","w"))+f"  Dauer ±{state['duration_sigma'][r]*100:.0f}%  Sicherheit {lr.safety(r):.2f}")
+            if k=="d": return f"d {val*60:.0f}/{tru*60:.0f}min ±{sd*60:.0f}"
+            if k=="tau": return f"tau {val*60:.0f}/{tru*60:.0f}min ±{sd*100:.0f}%"
+            return f"{k} {val:.3g}/{tru:.3g} ±{sd*100:.0f}%"
+        print(f"  {r[:18]:18} "+"  ".join(f(k) for k in ("a","b","d","tau","w"))+f"  Dauer ±{state['duration_sigma'][r]*100:.0f}%  Sicherheit {lr.safety(r):.2f}")
     print(f"  Puffer {v['|e_buf']:.2f}/{TPLANT.e_buf} ±{sg['|e_buf']*100:.0f}%")
     for e in state["experiments"][:4]:
         print(f"  Testlauf {e['label']:28} Gewinn {e['gain']:5.2f}  Dauer {e['hours']} h  verbessert {[(x['raum'][:8],x['groesse'],x['unsicherheit_minus_prozent']) for x in e['improves']]}")

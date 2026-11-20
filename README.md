@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.4.0. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.4.1. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -20,7 +20,10 @@ Nextcloud direkt ab.
   Aufheizrate (K/h bei offenen Ventilen und vollem Puffer),
   Leistungsbedarf (Anteil der Kessel-Dauerleistung bei offenen Ventilen)
   und Totzeit (wie lange es nach dem Öffnen der Ventile dauert, bis die
-  Wärme am Temperaturfühler ankommt).
+  Wärme am Temperaturfühler ankommt) und **Trägheit der Heizkörper** (Wasser
+  und Stahl speichern Wärme: sie kommt verzögert an und wirkt nach dem
+  Schließen nach; beim Boost im Saal am 20.11.2026 gemessen: 10 min Totzeit,
+  35 min Trägheit, die Temperatur stieg noch eine Stunde nach dem Schließen).
   Dazu je Raum die **Ventilkennlinie**: wie weit die Homematic-Thermostate
   beim Aufheizen öffnen, abhängig davon, wie weit der Raum unter dem
   Sollwert liegt. Gemessen öffnen sie nie ganz (Saal höchstens 48 %,
@@ -101,6 +104,11 @@ Nextcloud direkt ab.
   Duty Cycle, gilt eine eigene Obergrenze von 30 Befehlen je Stunde.
   Kommt ein Befehl nicht an (z. B. kurze Cloud-Unterbrechung), wird er
   nach 3 Minuten wiederholt statt als Handverstellung gewertet.
+- **Boost:** Während ein Thermostat im Boost läuft (Ventil fest offen, meist
+  80 %), sendet die Steuerung nichts, und die Einzelschätzungen
+  (Kennlinie, Heizfenster, Totzeit) lassen diese Zeit aus. Die gemeinsame
+  Anpassung nutzt den Boost dagegen gern: Ein kurzer Wärmestoß trennt
+  Totzeit und Trägheit am besten.
 - **Handverstellung:** Wer während eines Termins am Thermostat dreht, behält
   seinen Wert bis Terminende (außerhalb von Terminen 2 Stunden). Solche
   Vorgänge zählen nicht für den Sicherheitszuschlag.
