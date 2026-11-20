@@ -179,6 +179,7 @@ async def main(mode):
             await minutes(1)
             t=stubs.NOW[0]
             if t==day+timedelta(hours=13,minutes=45): print("13:45 Saal",round(temps["Saal"],1),"°C")
+            if t==day+timedelta(hours=7): print("Plan 07:00:",[(p["raum"],p["termin"],p["ziel"],p["ziel_grund"]) for p in c.status.get("plan",[])])
             if t in (day+timedelta(hours=7),day+timedelta(hours=9,minutes=30),day+timedelta(hours=10,minutes=40),day+timedelta(hours=14,minutes=30)):
                 print(t.strftime("%H:%M"),{r:(s.mode,s.desired,s.status.get("target"),s.status.get("target_source"),s.status.get("next_target")) for r,s in c.rooms.items() if r in ("Saal","Nebenraum (groß)","Küche")})
             if day+timedelta(hours=9)<=t<day+timedelta(hours=10,minutes=30):

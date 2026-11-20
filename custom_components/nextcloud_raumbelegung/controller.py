@@ -1557,9 +1557,13 @@ class HeatingController:
             ):
                 if plan.deadline is None:
                     continue
+                room_status = self.rooms[room].status if room in self.rooms else {}
                 plan_rows.append(
                     {
                         "raum": room,
+                        "termin": room_status.get("next_event"),
+                        "ziel": room_status.get("next_target"),
+                        "ziel_grund": room_status.get("next_target_source"),
                         "vorstufe_ab": _local(plan.pre),
                         "vorstufe_soll": plan.pre_level,
                         "komfort_ab": _local(plan.main),
