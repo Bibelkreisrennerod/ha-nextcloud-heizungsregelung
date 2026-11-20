@@ -87,10 +87,10 @@ class LeadSensor(StatusEntity, SensorEntity):
         lead = self._status.get("lead")
         return round(lead) if lead is not None else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         return {
+            "allein_bestfall_min": status.get("solo"),
             "sicherheitsfaktor": round(status["safety"], 2) if status.get("safety") else None,
             "gewertete_vorgaenge": status.get("learned_cycles"),
         }
@@ -108,8 +108,7 @@ class PlannedStartSensor(StatusEntity, SensorEntity):
     def native_value(self) -> datetime | None:
         return self._status.get("planned_start")
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         return {
             "vorstufe_ab": _iso(status.get("pre_start")),
@@ -132,8 +131,7 @@ class WarmAtSensor(StatusEntity, SensorEntity):
     def native_value(self) -> datetime | None:
         return self._status.get("reach")
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         return {
             "ohne_sicherheitszuschlag": _iso(status.get("reach_nominal")),
@@ -156,8 +154,7 @@ class SetpointSensor(StatusEntity, SensorEntity):
     def native_value(self) -> float | None:
         return self._status.get("desired")
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         return {"betriebsart": self._status.get("mode")}
 
 
@@ -190,8 +187,7 @@ class ValveSensor(StatusEntity, SensorEntity):
     def native_value(self) -> float | None:
         return self._status.get("valve")
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         count = self._status.get("valve_count")
         curve = self._status.get("curve")
         attrs: dict[str, Any] = {"ventile": count, "geschaetzt": not count}
@@ -219,8 +215,7 @@ class CoolingRateSensor(StatusEntity, SensorEntity):
         a = self._status.get("a")
         return round(a * 20.0, 2) if a is not None else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         a = self._status.get("a")
         return {
             "auskuehlkonstante_pro_h": round(a, 4) if a else None,
@@ -246,8 +241,7 @@ class HeatingRateSensor(StatusEntity, SensorEntity):
         b = self._status.get("b")
         return round(b, 2) if b is not None else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         a, b = status.get("a"), status.get("b")
         return {
@@ -273,8 +267,7 @@ class PowerDemandSensor(StatusEntity, SensorEntity):
         w = self._status.get("w")
         return round(w * 100) if w is not None else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         w, kw = status.get("w"), status.get("boiler_kw")
         return {
@@ -300,8 +293,7 @@ class DeadTimeSensor(StatusEntity, SensorEntity):
         d = self._status.get("d")
         return round(d * 60) if d is not None else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         sigma = (self._status.get("sigma") or {}).get("d")
         tau = self._status.get("tau")
         return {
@@ -330,8 +322,7 @@ class PredictionErrorSensor(StatusEntity, SensorEntity):
         value = status.get("err_heat") if status.get("err_heat") is not None else status.get("err_idle")
         return round(value, 2) if value is not None else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         idle, heat = status.get("err_idle"), status.get("err_heat")
         return {
@@ -361,8 +352,7 @@ class ProtocolSensor(StatusEntity, SensorEntity):
                 return row["abweichung_frist"]
         return None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         return {"vorgaenge": (self._status.get("history") or [])[:PROTOCOL_ROWS]}
 
 
@@ -380,15 +370,14 @@ class ControlStatusSensor(StatusEntity, SensorEntity):
         status = self._status
         if not status:
             return None
-        if status.get("kalibrierung_status") not in (None, "aus"):
-            return f"Kalibrierung {status['kalibrierung_status']}"
+        if status.get("kalibrierung_status") not in (None, "kein Lauf"):
+            return f"Kalibrierlauf {status['kalibrierung_status']}"
         if not status.get("automatik"):
-            return "aus"
+            return "Automatik aus"
         count = status.get("heizen", 0)
         return f"{count} Raum heizt" if count == 1 else f"{count} Räume heizen"
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         return {
             "plan": status.get("plan"),
@@ -427,8 +416,7 @@ class BufferCapacitySensor(StatusEntity, SensorEntity):
         hours, kw = status.get("puffer_kapazitaet_h"), status.get("kessel_kw")
         return round(hours * kw, 1) if hours is not None and kw else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         hours = status.get("puffer_kapazitaet_h")
         return {
@@ -472,8 +460,7 @@ class CalibrationSensor(StatusEntity, SensorEntity):
     def native_value(self) -> str | None:
         return self._status.get("kalibrierung_status")
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         return {
             "lauf": status.get("kalibrierung"),
@@ -534,8 +521,7 @@ class BoilerStateSensor(StatusEntity, SensorEntity):
             return "Kessel offline" if offline else "keine aktuellen Daten"
         return controller.boiler.state or "verbunden"
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         controller = self._controller
         boiler = controller.boiler if controller else None
         return {
@@ -568,8 +554,7 @@ class ModelFitSensor(StatusEntity, SensorEntity):
         fit = self._status.get("fit") or {}
         return fit.get("rms")
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         fit = self._status.get("fit") or {}
         return {
             "zeitpunkt": fit.get("zeitpunkt"),
@@ -593,8 +578,7 @@ class TestRunSensor(StatusEntity, SensorEntity):
         runs = (self._status.get("fit") or {}).get("experiments") or []
         return runs[0]["label"] if runs else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         fit = self._status.get("fit") or {}
         runs = fit.get("experiments") or []
         best = runs[0] if runs else {}

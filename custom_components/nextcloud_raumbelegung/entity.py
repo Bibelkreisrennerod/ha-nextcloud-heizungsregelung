@@ -13,6 +13,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import slugify
 
 from .const import DOMAIN
+from .explanations import Explained
 
 
 def room_unique_id(entry: ConfigEntry, room: str | None, key: str) -> str:
@@ -69,7 +70,7 @@ def add_room_entities(
     entry.async_on_unload(runtime.coordinator.async_add_listener(_add_new_rooms))
 
 
-class StatusEntity(Entity):
+class StatusEntity(Explained, Entity):
     """Entitaet, die sich nach jedem Steuerungstakt aktualisiert."""
 
     _attr_has_entity_name = True

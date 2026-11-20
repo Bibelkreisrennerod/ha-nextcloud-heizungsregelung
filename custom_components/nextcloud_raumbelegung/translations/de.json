@@ -60,7 +60,7 @@
         "name": "Komforttemperatur"
       },
       "priority": {
-        "name": "Vorrang"
+        "name": "Priorität"
       },
       "setback": {
         "name": "Absenktemperatur"

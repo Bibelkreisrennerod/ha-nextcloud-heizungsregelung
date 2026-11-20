@@ -82,7 +82,7 @@ from .const import (
 )
 from .history import ReplayResult, RoomSeries, Series, replay
 from .learning import Learner, RoomSample, flow_share
-from .physics import PlantParams, PlantState, RoomParams, plant_step, valve
+from .physics import PlantParams, PlantState, RoomParams, plant_step, solo_minutes, valve
 from .planning import (
     PlanResult,
     RoomInput,
@@ -1124,7 +1124,7 @@ class HeatingController:
                         f"plan_{room}",
                         f"{room} wird voraussichtlich nicht rechtzeitig warm",
                         f"Laut Plan ist {room} erst um {self._clock(plan.reach)} warm "
-                        f"(Frist {self._clock(plan.deadline)}). Vorrang anderer Räume oder "
+                        f"(Frist {self._clock(plan.deadline)}). höhere Priorität anderer Räume oder "
                         "die Außentemperatur lassen nicht mehr zu.",
                     )
             elif self._late_notified.pop(room, None) is not None:
@@ -1178,7 +1178,7 @@ class HeatingController:
         if desired > setback + SETPOINT_TOLERANCE:
             return "Vorstufe", desired
         if desired < setback - SETPOINT_TOLERANCE:
-            return "abgesenkt (Vorrang)", desired
+            return "abgesenkt (Priorität)", desired
         return "abgesenkt", desired
 
     async def _ensure_manual(self, now: datetime, room: str, state: RoomState, info: dict[str, Any]) -> None:
@@ -1437,7 +1437,13 @@ class HeatingController:
         lead = None
         if plan is not None and plan.deadline is not None and plan.heat_start() is not None:
             lead = (plan.deadline - plan.heat_start()).total_seconds() / 60
+        # Bestfall: der Raum allein, voller Puffer, jetzige Aussentemperatur, ohne Zuschlag
+        solo = None
+        outside = self._outside_now()
+        if info["temp"] is not None and outside is not None:
+            solo = solo_minutes(params, plant, t_from=info["temp"], t_to=info["comfort"], outside=outside, limit=24 * 60)
         return {
+            "solo": None if solo is None or solo >= 24 * 60 else round(solo),
             "mode": info.get("mode"),
             "demand": desired is not None and desired >= info["comfort"] - SETPOINT_TOLERANCE,
             "temp": info["temp"],
@@ -1561,7 +1567,7 @@ class HeatingController:
             "rows_pending": self.learner.rows_pending,
             "historie_gelernt": self._bootstrapped,
             "lernt_aus_historie": self._learning_history,
-            "kalibrierung_status": "aus"
+            "kalibrierung_status": "kein Lauf"
             if self.calibration is None
             else ("läuft" if self.calibration.running else "wartet auf Ruhe"),
         }

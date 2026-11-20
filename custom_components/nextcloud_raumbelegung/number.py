@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import GLOBAL_DEFAULTS, ROOM_DEFAULTS
 from .entity import add_room_entities, room_device_info, room_unique_id
+from .explanations import Explained
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ async def async_setup_entry(
     )
 
 
-class SettingNumber(RestoreNumber):
+class SettingNumber(Explained, RestoreNumber):
     """Wert, den die Steuerung liest. Bleibt ueber Neustarts erhalten."""
 
     _attr_has_entity_name = True

@@ -44,8 +44,7 @@ class HeatingDemand(StatusEntity, BinarySensorEntity):
         status = self._status
         return status.get("demand") if status else None
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         return {
             "betriebsart": status.get("mode"),
@@ -90,8 +89,7 @@ class ModelCalibrated(StatusEntity, BinarySensorEntity):
             return None
         return bool(self._status.get("calibrated"))
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _extra(self) -> dict[str, Any] | None:
         status = self._status
         return {
             "sicherheitsfaktor": round(status["safety"], 2) if status.get("safety") else None,

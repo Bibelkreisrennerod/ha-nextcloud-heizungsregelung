@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .entity import add_room_entities, room_device_info, room_unique_id
+from .explanations import Explained
 
 
 async def async_setup_entry(
@@ -25,7 +26,7 @@ async def async_setup_entry(
     )
 
 
-class AutomaticSwitch(SwitchEntity, RestoreEntity):
+class AutomaticSwitch(Explained, SwitchEntity, RestoreEntity):
     """Aus: die Steuerung laesst die Thermostate in Ruhe."""
 
     _attr_has_entity_name = True

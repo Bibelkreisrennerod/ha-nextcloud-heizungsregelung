@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.4.1. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.4.2. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -43,7 +43,7 @@ Nextcloud direkt ab.
   Jeder Raum beginnt so spät wie möglich und ist 15 Minuten vor
   Terminbeginn warm (Komforttemperatur minus 0,5 K). Heizen andere Räume
   gleichzeitig, verlängert sich die Vorheizzeit entsprechend. Reicht die Zeit
-  nicht für alle, entscheidet der Vorrang. Wo es Energie spart, gibt es eine
+  nicht für alle, entscheidet die Priorität. Wo es Energie spart, gibt es eine
   Vorstufe: früh auf einen Zwischen-Sollwert (Komfort minus 3 K), spät auf
   Komfort. Räume ohne Termin werden während knapper Phasen 2 K unter die
   Absenkung gesetzt, damit ihre Ventile den aufheizenden Räumen keinen
@@ -166,6 +166,9 @@ Voraussetzung: Home Assistant 2026.11 oder neuer (Marketplace).
 
 ## Was angelegt wird
 
+Jede Entität erklärt sich selbst: Beim Antippen steht im Attribut
+`erklaerung`, was der Wert bedeutet und wie er entsteht.
+
 Je Raum ein Gerät:
 
 | Entität | Bedeutung |
@@ -187,7 +190,7 @@ Je Raum ein Gerät:
 | Heizprotokoll | Letzte Heizvorgänge mit Start, erreicht um, Abweichung zur Frist |
 | Komforttemperatur | Zieltemperatur während Terminen (Standard 21 °C) |
 | Vorheizzeit Startwert | Wie lange der Raum allein von 14 auf 21 °C braucht, bei 0 °C außen; gilt, bis gemessen wurde (Standard 120 min) |
-| Vorrang | 1 = höchster; entscheidet, wenn die Zeit nicht für alle reicht |
+| Priorität | 1 = am wichtigsten; entscheidet, wenn die Zeit nicht für alle reicht |
 | Automatik | Aus: Thermostate dieses Raums werden nicht gesteuert (auch nicht vom Kalibrierlauf) |
 
 Dazu ein Gerät „Heizungssteuerung“ mit Status (Attribut `plan`),
