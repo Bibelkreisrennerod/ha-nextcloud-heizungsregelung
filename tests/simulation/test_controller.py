@@ -167,11 +167,11 @@ async def main(mode):
         print("Zusage aus Sollwert:",{"21/17":guess(21,17),"21/20.8":guess(21,20.8),"18 Vorstufe":guess(18,16),"14":guess(14,14),"12 wartend":guess(12,13),"21 Profil":guess(21,17,"auto")})
         return
     if mode=="targets":
-        # Gottesdienst (Saal 19,5 per Regel, Nebenraum 21), danach Seniorenkreis mit "Temperatur: 22",
+        # Gottesdienst (Saal 19,5 per Regel, Nebenraum 21), danach Seniorenkreis mit Tag "22",
         # Kueche mit eigener Angabe in der Beschreibung
         day=datetime(2026,11,22,0,0,tzinfo=timezone.utc)
         ev=[cal.RoomEvent("Predigtgottesdienst",day+timedelta(hours=9),day+timedelta(hours=10,minutes=30),False,["Saal","Nebenraum (groß)"],"","Gemeinde"),
-            cal.RoomEvent("Seniorenkreis",day+timedelta(hours=14),day+timedelta(hours=15,minutes=30),False,["Saal"],"","Gemeinde","Temperatur: 22"),
+            cal.RoomEvent("Seniorenkreis",day+timedelta(hours=14),day+timedelta(hours=15,minutes=30),False,["Saal"],"","Gemeinde","",["Senioren","22"]),
             cal.RoomEvent("Mittagessen",day+timedelta(hours=10,minutes=30),day+timedelta(hours=12),False,["Küche"],"","Gemeinde","Temperatur Küche: 19")]
         rt.coordinator.data=Data(ev,list(ROOMS))
         since=stubs.NOW[0]; seen={}

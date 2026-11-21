@@ -10,7 +10,7 @@ EXPLANATIONS: dict[str, str] = {
         "Aus: Die Steuerung lässt die Thermostate dieses Raums in Ruhe, auch beim Kalibrierlauf. "
         "Wirkt nur, wenn die globale Automatik an ist."
     ),
-    "comfort": "Zieltemperatur während eines Termins. Der Raum soll sie zu Terminbeginn erreicht haben. Einzelne Termine können abweichen: „Temperatur: 21“ in der Terminbeschreibung oder eine Regel in den Optionen der Integration (z. B. „gottesdienst @ Saal = -1,5 K“).",
+    "comfort": "Zieltemperatur während eines Termins. Der Raum soll sie zu Terminbeginn erreicht haben. Einzelne Termine können abweichen: ein Tag „20“ oder „20 °C“ im Termin, „Temperatur: 21“ in der Beschreibung oder eine Regel in den Optionen der Integration (z. B. „gottesdienst @ Saal = -1,5 K“). Erlaubt sind 15–25 °C; andere Angaben werden übergangen und gemeldet.",
     "preheat": (
         "Schätzung, wie lange der Raum allein von 14 auf 21 °C braucht (bei 0 °C aussen). "
         "Nur Startannahme: Sobald der Raum in einer Modellanpassung war, gelten die gelernten Werte."

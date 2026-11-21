@@ -167,12 +167,12 @@
         },
         "data_description": {
           "stokercloud_name": "Name aus der Adresse der öffentlichen Ansicht, z. B. „nawatec“ bei stokercloud.dk/dev/nawatec.html. Kein Passwort nötig. Ein gewählter Vorlauf-Sensor hat Vorrang.",
-          "target_rules": "Eine Regel je Zeile: „Stichwort @ Raum = Wert“. Das Stichwort wird im Titel und in den Kategorien gesucht, Groß-/Kleinschreibung egal. „@ Raum“ ist optional (mehrere mit Komma). Wert mit Vorzeichen oder K ist relativ zur Komforttemperatur, sonst absolut, z. B. „gottesdienst @ Saal = -1,5 K“ oder „jugend = 20“. Die erste passende Regel gilt. „Temperatur: 21“ in der Terminbeschreibung geht jeder Regel vor."
+          "target_rules": "Eine Regel je Zeile: „Stichwort @ Raum = Wert“. Das Stichwort wird im Titel und in den Kategorien gesucht, Groß-/Kleinschreibung egal. „@ Raum“ ist optional (mehrere mit Komma). Wert mit Vorzeichen oder K ist relativ zur Komforttemperatur, sonst absolut (erlaubt 15–25 °C bzw. höchstens 5 K), z. B. „gottesdienst @ Saal = -1,5 K“ oder „jugend = 20“. Die erste passende Regel gilt. Eine Temperatur im Termin (Tag „20“ oder „Temperatur: 21“ in der Beschreibung) geht jeder Regel vor."
         }
       }
     },
     "error": {
-      "invalid_rule": "Regel nicht lesbar (Zeile {line}). Form: Stichwort @ Raum = Wert, z. B. gottesdienst @ Saal = -1,5 K"
+      "invalid_rule": "Regel nicht verwendbar (Zeile {line}). Form: Stichwort @ Raum = Wert, z. B. gottesdienst @ Saal = -1,5 K"
     }
   },
   "services": {

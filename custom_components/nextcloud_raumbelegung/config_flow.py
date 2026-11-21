@@ -151,7 +151,7 @@ class NextcloudRoomsOptionsFlow(OptionsFlow):
                 parse_rules(user_input.get(CONF_TARGET_RULES))
             except RuleError as err:
                 errors[CONF_TARGET_RULES] = "invalid_rule"
-                placeholders["line"] = f"{err.args[0]}: {err.args[1]}"
+                placeholders["line"] = f"{err.args[0]}: {err.args[1]} – {err.args[2]}"
             else:
                 return self.async_create_entry(data=user_input)
         options = user_input if user_input is not None else self.config_entry.options

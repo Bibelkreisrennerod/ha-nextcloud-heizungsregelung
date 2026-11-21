@@ -273,7 +273,8 @@ class HeatingController:
         try:
             self._rules = parse_rules(entry.options.get(CONF_TARGET_RULES))
         except RuleError as err:  # im Optionsdialog geprueft, hier nur zur Sicherheit
-            _LOGGER.warning("Regel fuer Zieltemperatur nicht lesbar (Zeile %s: %s)", *err.args)
+            _LOGGER.warning("Regel fuer Zieltemperatur nicht lesbar (Zeile %s: %s, %s)", *err.args)
+        self._hint_notified: set[tuple[str, str, str]] = set()  # (Raum, Terminbeginn, Hinweis)
         name = (entry.options.get(CONF_STOKERCLOUD) or "").strip()
         self._boiler_client = (
             StokerCloudClient(async_get_clientsession(hass), name) if name else None
@@ -757,6 +758,16 @@ class HeatingController:
             targets = [
                 event_target(room, e.summary, e.description, e.categories, setting, self._rules) for e in events
             ]
+            for event, item in zip(events, targets):
+                if item.hint and (key := (room, event.start.isoformat(), item.hint)) not in self._hint_notified:
+                    self._hint_notified.add(key)
+                    value_text = f"{item.value:.1f}".replace(".", ",")
+                    self._notify(
+                        f"target_{room}_{event.start:%Y%m%d%H%M}",
+                        "Temperaturangabe übergangen",
+                        f"„{event.summary}“ am {dt_util.as_local(event.start):%d.%m. %H:%M} in {room}: "
+                        f"{item.hint}. Es gilt {value_text} °C ({item.label()}).",
+                    )
             running = [t for e, t in zip(events, targets) if e.start <= now]
             following = next((t for e, t in zip(events, targets) if e.start > now), None)
             # Ziel jetzt: laufender Termin (bei mehreren der hoechste), sonst der naechste
@@ -1486,6 +1497,8 @@ class HeatingController:
             "target_source": info["target"].label(),
             "next_target": info["next_target"].value,
             "next_target_source": info["next_target"].label(),
+            "target_hint": info["target"].hint,
+            "next_target_hint": info["next_target"].hint,
             "next_start": upcoming.start if upcoming else None,
             "climates": info["climates"],
             "area": info["area"],
@@ -1564,6 +1577,7 @@ class HeatingController:
                         "termin": room_status.get("next_event"),
                         "ziel": room_status.get("next_target"),
                         "ziel_grund": room_status.get("next_target_source"),
+                        "ziel_hinweis": room_status.get("next_target_hint") or None,
                         "vorstufe_ab": _local(plan.pre),
                         "vorstufe_soll": plan.pre_level,
                         "komfort_ab": _local(plan.main),

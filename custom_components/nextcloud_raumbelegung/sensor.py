@@ -118,6 +118,7 @@ class PlannedStartSensor(StatusEntity, SensorEntity):
             "knapp": status.get("planned_late", False),
             "zieltemperatur": status.get("next_target"),
             "ziel_grund": status.get("next_target_source"),
+            "ziel_hinweis": status.get("next_target_hint") or None,
         }
 
 
