@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.5.1. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.5.2. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -216,13 +216,15 @@ Sensoren zeigen den laufenden oder nächsten Termin (`event`, `start`, `end`,
 Ohne weitere Angabe gilt im Termin die Komforttemperatur des Raums. Einzelne
 Termine können abweichen, die erste passende Angabe gilt:
 
-1. **Im Termin selbst,** als Schlagwort (in Nextcloud „Tag“) oder in der
-   Beschreibung. Als Tag reicht die Zahl: `20`, `20 °C`, `19,5°` oder
-   `Temperatur 20`; mit Raum davor (`Saal 20`) gilt er nur für diesen Raum.
-   In der Beschreibung: `Temperatur: 21` für alle gebuchten Räume,
-   `Temperatur Saal: 20` nur für den Saal. Eine Angabe für den Raum geht der
-   allgemeinen vor, ein Tag der Beschreibung. Ein Wert mit Vorzeichen oder
-   `K` ist relativ zur Komforttemperatur (`-1 K`).
+1. **Temperatur-Tag im Termin** (in Nextcloud „Tags“). Der Tag muss das Wort
+   „Temperatur“ enthalten, damit er nicht mit anderen Tags verwechselt wird;
+   die Reihenfolge ist frei und „°C“ nicht nötig: `Temperatur 20`,
+   `20 °C Temperatur`, `Temperatur Saal 20°C`, `20 Temperatur Saal`. Ohne
+   Raum gilt der Wert für alle im Termin als Ressource gebuchten Räume, mit
+   Raum nur für diesen; die Angabe für den Raum geht der allgemeinen vor. Ein
+   Raum, der im Termin nicht als Ressource gebucht ist, ist nicht erlaubt. Ein
+   Wert mit Vorzeichen oder `K` ist relativ zur Komforttemperatur
+   (`Temperatur -1 K`). Die Terminbeschreibung wird nicht ausgewertet.
 2. **Regeln in den Optionen der Integration** (Geräte & Dienste > Nextcloud
    Raumbelegung > Konfigurieren), eine je Zeile:
 
@@ -231,23 +233,22 @@ Termine können abweichen, die erste passende Angabe gilt:
    jugend = 20
    ```
 
-   Das Stichwort wird ohne Groß-/Kleinschreibung im Titel und in den
-   Nextcloud-Kategorien gesucht, „gottesdienst“ passt also auch auf
+   Das Stichwort wird ohne Groß-/Kleinschreibung im Titel und in den Tags
+   gesucht, „gottesdienst“ passt also auch auf
    „Abendmahlgottesdienst“ und „Predigtgottesdienst“. `@ Raum` (mehrere mit
    Komma) beschränkt die Regel auf diese Räume. Die erste passende Regel gilt.
 3. Sonst die **Komforttemperatur** des Raums.
 
 Laufen mehrere Termine gleichzeitig, gilt der höchste Wert. Unrealistische
 Werte zählen nicht: erlaubt sind 15–25 °C, relativ höchstens 5 K. Eine Regel
-außerhalb lehnt der Optionsdialog ab; eine Angabe im Termin außerhalb wird
-übergangen (dann gilt Regel oder Komforttemperatur) und unter
-„Benachrichtigungen“ gemeldet. Zahlen mit mehr als zwei Stellen (`2026`)
-gelten nicht als Temperatur. Heizt der Plan während eines Termins schon für
-den nächsten mit höherem Ziel, gilt der höhere Wert. Welches Ziel gerade
+außerhalb lehnt der Optionsdialog ab. Ein Temperatur-Tag mit Wert außerhalb,
+mit nicht gebuchtem oder unbekanntem Raum, ohne Zahl oder mit mehreren Zahlen
+wird übergangen (dann gilt Regel oder Komforttemperatur) und unter
+„Benachrichtigungen“ gemeldet. Heizt der Plan während eines Termins schon
+für den nächsten mit höherem Ziel, gilt der höhere Wert. Welches Ziel gerade
 gilt und warum, zeigen die Attribute `zieltemperatur`, `ziel_grund` und
-`ziel_hinweis` (übergangene Angabe) von
-„Heizbedarf“ (laufender oder nächster Termin) und „Geplanter Heizstart“
-(Termin, für den geplant wird).
+`ziel_hinweis` (übergangene Tags) von „Heizbedarf“ (laufender oder nächster
+Termin) und „Geplanter Heizstart“ (Termin, für den geplant wird).
 
 ## Verhalten
 

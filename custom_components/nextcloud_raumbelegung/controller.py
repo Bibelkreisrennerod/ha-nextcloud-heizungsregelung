@@ -94,7 +94,7 @@ from .planning import (
     setpoint_at,
 )
 from .stokercloud import StokerCloudClient, StokerCloudError, StokerData
-from .targets import Rule, RuleError, Target, event_target, parse_rules
+from .targets import EventTags, Rule, RuleError, Target, event_target, parse_event_tags, parse_rules
 
 _LOGGER = logging.getLogger(__name__)
 STORE_VERSION = 1
@@ -274,7 +274,7 @@ class HeatingController:
             self._rules = parse_rules(entry.options.get(CONF_TARGET_RULES))
         except RuleError as err:  # im Optionsdialog geprueft, hier nur zur Sicherheit
             _LOGGER.warning("Regel fuer Zieltemperatur nicht lesbar (Zeile %s: %s, %s)", *err.args)
-        self._hint_notified: set[tuple[str, str, str]] = set()  # (Raum, Terminbeginn, Hinweis)
+        self._hint_notified: set[tuple[str, str, str]] = set()  # (Terminbeginn, Titel, Hinweis)
         name = (entry.options.get(CONF_STOKERCLOUD) or "").strip()
         self._boiler_client = (
             StokerCloudClient(async_get_clientsession(hass), name) if name else None
@@ -745,6 +745,7 @@ class HeatingController:
 
         # ---- 1: Zustand je Raum
         infos: dict[str, dict[str, Any]] = {}
+        tags = self._event_tags(data, now)
         for room in data.rooms:
             self.rooms.setdefault(room, RoomState())
             climates, area_id = self._climates(room)
@@ -756,20 +757,12 @@ class HeatingController:
             )
             setting = self.setting(room, "comfort")
             targets = [
-                event_target(room, e.summary, e.description, e.categories, setting, self._rules) for e in events
+                event_target(room, e.summary, e.categories, setting, self._rules, tags[id(e)]) for e in events
             ]
-            for event, item in zip(events, targets):
-                if item.hint and (key := (room, event.start.isoformat(), item.hint)) not in self._hint_notified:
-                    self._hint_notified.add(key)
-                    value_text = f"{item.value:.1f}".replace(".", ",")
-                    self._notify(
-                        f"target_{room}_{event.start:%Y%m%d%H%M}",
-                        "Temperaturangabe übergangen",
-                        f"„{event.summary}“ am {dt_util.as_local(event.start):%d.%m. %H:%M} in {room}: "
-                        f"{item.hint}. Es gilt {value_text} °C ({item.label()}).",
-                    )
+            hints = ["; ".join(tags[id(e)].hints) for e in events]
             running = [t for e, t in zip(events, targets) if e.start <= now]
             following = next((t for e, t in zip(events, targets) if e.start > now), None)
+            next_hint = next((h for e, h in zip(events, hints) if e.start > now), "")
             # Ziel jetzt: laufender Termin (bei mehreren der hoechste), sonst der naechste
             target = max(running, key=lambda t: t.value) if running else following or Target(setting, "Raum")
             infos[room] = {
@@ -787,6 +780,8 @@ class HeatingController:
                 "comfort": target.value,
                 "target": target,
                 "next_target": following or target,
+                "target_hint": next((h for e, h in zip(events, hints) if e.start <= now and h), "") or next_hint,
+                "next_target_hint": next_hint,
                 "targets": [t.value for t in targets],
                 "events": events,
                 "current": next((e for e in events if e.start <= now), None),
@@ -1160,6 +1155,28 @@ class HeatingController:
             elif self._late_notified.pop(room, None) is not None:
                 self._dismiss(f"plan_{room}")
 
+    def _event_tags(self, data: Any, now: datetime) -> dict[int, EventTags]:
+        """Temperatur-Tags je Termin auswerten; Uebergangenes einmal je Termin melden."""
+        known = list(data.rooms)
+        result: dict[int, EventTags] = {}
+        for event in data.events:
+            if event.all_day or event.end <= now:
+                continue
+            parsed = parse_event_tags(event.categories, event.rooms, known)
+            result[id(event)] = parsed
+            for hint in parsed.hints:
+                key = (event.start.isoformat(), event.summary, hint)
+                if key in self._hint_notified:
+                    continue
+                self._hint_notified.add(key)
+                self._notify(
+                    f"target_{event.start:%Y%m%d%H%M}_{len(self._hint_notified)}",
+                    "Temperatur-Tag übergangen",
+                    f"„{event.summary}“ am {dt_util.as_local(event.start):%d.%m. %H:%M}: {hint}. "
+                    "Bitte den Tag im Kalender korrigieren; bis dahin zählt er nicht.",
+                )
+        return result
+
     @staticmethod
     def _clock(moment: datetime | None) -> str:
         return dt_util.as_local(moment).strftime("%H:%M") if moment else "nie"
@@ -1497,8 +1514,8 @@ class HeatingController:
             "target_source": info["target"].label(),
             "next_target": info["next_target"].value,
             "next_target_source": info["next_target"].label(),
-            "target_hint": info["target"].hint,
-            "next_target_hint": info["next_target"].hint,
+            "target_hint": info["target_hint"],
+            "next_target_hint": info["next_target_hint"],
             "next_start": upcoming.start if upcoming else None,
             "climates": info["climates"],
             "area": info["area"],

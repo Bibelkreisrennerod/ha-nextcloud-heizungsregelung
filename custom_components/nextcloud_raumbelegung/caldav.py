@@ -59,17 +59,16 @@ class RoomEvent:
     rooms: list[str] = field(default_factory=list)
     location: str = ""
     calendar: str = ""
-    description: str = ""
-    categories: list[str] = field(default_factory=list)
+    categories: list[str] = field(default_factory=list)  # Nextcloud-Tags
 
 
 # ---------------------------------------------------------------- Auswertung
 
 
-def _unescape(value: str, newline: str = " ") -> str:
+def _unescape(value: str) -> str:
     return (
-        value.replace("\\n", newline)
-        .replace("\\N", newline)
+        value.replace("\\n", " ")
+        .replace("\\N", " ")
         .replace("\\,", ",")
         .replace("\\;", ";")
         .replace("\\\\", "\\")
@@ -114,7 +113,7 @@ def parse_events(xml_text: str, calendar_name: str = "") -> list[RoomEvent]:
         ical = re.sub(r"\n[ \t]", "", ical)  # umgebrochene Zeilen zusammenfuegen
         for block in ical.split("BEGIN:VEVENT")[1:]:
             block = block.split("END:VEVENT")[0]
-            summary = location = description = ""
+            summary = location = ""
             categories: list[str] = []
             start = end = None
             all_day = cancelled = False
@@ -134,8 +133,6 @@ def parse_events(xml_text: str, calendar_name: str = "") -> list[RoomEvent]:
                     summary = _unescape(value).strip()
                 elif name == "LOCATION":
                     location = _unescape(value).strip()
-                elif name == "DESCRIPTION":
-                    description = _unescape(value, "\n").strip()
                 elif name == "CATEGORIES":
                     for item in re.split(r"(?<!\\),", value):
                         item = _unescape(item).strip()
@@ -158,7 +155,7 @@ def parse_events(xml_text: str, calendar_name: str = "") -> list[RoomEvent]:
                 end = start + (timedelta(days=1) if all_day else timedelta(hours=1))
             events.append(
                 RoomEvent(
-                    summary, start, end, all_day, rooms, location, calendar_name, description, categories
+                    summary, start, end, all_day, rooms, location, calendar_name, categories
                 )
             )
     return events

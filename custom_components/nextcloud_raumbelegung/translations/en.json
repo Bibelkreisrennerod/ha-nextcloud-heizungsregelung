@@ -163,7 +163,7 @@
         },
         "data_description": {
           "stokercloud_name": "Name from the public view address. No password needed.",
-          "target_rules": "One rule per line: \"keyword @ room = value\". The keyword is searched in the title and categories, case-insensitive. \"@ room\" is optional (several separated by commas). A value with a sign or K is relative to the comfort temperature, otherwise absolute (allowed 15–25 °C or at most 5 K), e.g. \"service @ Hall = -1.5 K\" or \"youth = 20\". The first matching rule wins. A temperature in the event (tag \"20\" or \"Temperatur: 21\" in the description) overrides every rule."
+          "target_rules": "One rule per line: \"keyword @ room = value\". The keyword is searched in the title and tags, case-insensitive. \"@ room\" is optional (several separated by commas). A value with a sign or K is relative to the comfort temperature, otherwise absolute (allowed 15–25 °C or at most 5 K), e.g. \"service @ Hall = -1.5 K\" or \"youth = 20\". The first matching rule wins. A temperature tag in the event (\"Temperatur 20\" or \"Temperatur Saal 20 °C\") overrides every rule."
         }
       }
     },
