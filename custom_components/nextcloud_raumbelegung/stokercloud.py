@@ -46,7 +46,9 @@ class StokerData:
     values: dict[str, dict[str, Any]] = field(default_factory=dict)  # Kennung -> {value, unit, name}
     flow: float | None = None
     dhw: float | None = None
-    power: float | None = None
+    power: float | None = None  # Prozent der Nennleistung
+    power_kw: float | None = None
+    nominal_kw: float | None = None
     return_temp: float | None = None
     state: str | None = None
     updated: datetime | None = None  # Zeitpunkt der letzten Meldung des Kessels
@@ -106,7 +108,9 @@ def _scan_date(text: str, dates: list[datetime]) -> None:
 
 def _pick(values: dict[str, dict[str, Any]], keys: tuple[str, ...], unit_hint: str | None) -> float | None:
     for wanted in keys:
-        for ident, item in values.items():
+        # genaue Kennung zuerst ("dhw" = Warmwasser-Ist, nicht "dhwdata.3" = Schaltdifferenz)
+        ordered = sorted(values.items(), key=lambda kv: kv[0].lower() != wanted)
+        for ident, item in ordered:
             label = f"{ident} {item.get('name') or ''}".lower()
             if wanted not in label or any(word in label for word in EXCLUDE):
                 continue
@@ -129,6 +133,24 @@ def parse(payload: Any, now: datetime, tz) -> StokerData:
     data.dhw = _pick(values, DHW_KEYS, "°c|degree|lng_unit_c")
     data.return_temp = _pick(values, RETURN_KEYS, "°c|degree|lng_unit_c")
     data.power = _pick(values, POWER_KEYS, "%|percent")
+    # Nennleistung: Kennung "8" in kW (StokerCloud-Startseite)
+    nominal = values.get("8") or {}
+    if "kw" in str(nominal.get("unit") or "").lower() and (number := _number(nominal.get("value"))):
+        if 3 <= number <= 500:
+            data.nominal_kw = number
+    # "miscdata.output" ist bei NBE die Leistung in kW (gleicher Wert wie Kennung "5", Einheit kW),
+    # nicht in Prozent
+    if data.power is not None:
+        kw_values = [
+            _number(item.get("value"))
+            for ident, item in values.items()
+            if "kw" in str(item.get("unit") or "").lower() and ident != "8"
+        ]
+        if any(v is not None and abs(v - data.power) < 0.05 for v in kw_values):
+            data.power_kw = data.power
+            data.power = (
+                round(data.power_kw / data.nominal_kw * 100.0, 1) if data.nominal_kw else None
+            )
     for ident in ("boilerstate", "state", "status"):
         for key, item in values.items():
             if key.lower().endswith(ident) and isinstance(item.get("value"), str):

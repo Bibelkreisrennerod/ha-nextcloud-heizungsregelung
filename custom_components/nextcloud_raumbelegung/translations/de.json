@@ -19,6 +19,13 @@
         "data": {
           "calendars": "Kalender"
         }
+      },
+      "reconfigure": {
+        "title": "Kalender ändern",
+        "description": "Kalender, die der Benutzer {user} sehen kann. Fehlt ein Kalender, muss er in Nextcloud zuerst für diesen Benutzer freigegeben werden. Gelernte Werte und Einstellungen bleiben erhalten.",
+        "data": {
+          "calendars": "Kalender"
+        }
       }
     },
     "error": {
@@ -29,7 +36,10 @@
       "unknown": "Unerwarteter Fehler, Details stehen im Protokoll."
     },
     "abort": {
-      "already_configured": "Diese Nextcloud ist mit diesem Benutzer bereits eingerichtet."
+      "already_configured": "Diese Nextcloud ist mit diesem Benutzer bereits eingerichtet.",
+      "reconfigure_successful": "Kalenderauswahl gespeichert.",
+      "invalid_auth": "Benutzername oder App-Passwort stimmt nicht mehr.",
+      "cannot_connect": "Nextcloud ist nicht erreichbar."
     }
   },
   "entity": {
@@ -91,7 +101,7 @@
         "name": "Status"
       },
       "global_boiler_flow": {
-        "name": "Kessel Vorlauf"
+        "name": "Kesseltemperatur"
       },
       "global_boiler_dhw": {
         "name": "Kessel Warmwasser"

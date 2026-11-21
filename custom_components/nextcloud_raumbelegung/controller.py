@@ -708,7 +708,11 @@ class HeatingController:
 
     def _boiler_kw(self) -> float | None:
         boiler = self._boiler_fresh()
-        if boiler is None or boiler.power is None:
+        if boiler is None:
+            return None
+        if boiler.power_kw is not None:
+            return boiler.power_kw
+        if boiler.power is None:
             return None
         return boiler.power / 100.0 * self._boiler_nominal_kw()
 
@@ -1326,7 +1330,14 @@ class HeatingController:
                 self._duty_entity = next(
                     (
                         e.entity_id for e in er.async_get(self.hass).entities.values()
-                        if e.platform == "homematicip_cloud" and "duty_cycle" in e.entity_id
+                        if e.platform == "homematicip_cloud"
+                        and e.disabled_by is None
+                        # Entitaets-ID ist uebersetzt ("..._tastverhaltnis"), Schluessel und ID nicht
+                        and (
+                            e.translation_key == "duty_cycle"
+                            or str(e.unique_id).lower().endswith("duty_cycle")
+                            or "duty_cycle" in e.entity_id
+                        )
                     ),
                     None,
                 )

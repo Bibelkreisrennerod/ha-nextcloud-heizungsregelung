@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.5.2. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.5.3. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -163,6 +163,12 @@ Voraussetzung: Home Assistant 2026.11 oder neuer (Marketplace).
 3. Adresse der Nextcloud, Benutzername und App-Passwort eingeben.
 4. Die Kalender auswählen, aus denen Raumbuchungen gelesen werden. Angeboten
    werden eigene, freigegebene und übertragene (delegierte) Kalender.
+
+Die Kalenderauswahl lässt sich später ändern, ohne Gelerntes zu verlieren:
+Geräte & Dienste > Nextcloud Raumbelegung > ⋮ > Neu konfigurieren. Fehlt dort
+ein Kalender, muss er in Nextcloud erst für den Benutzer der Integration
+freigegeben werden. Den Eintrag zu löschen und neu anzulegen löscht dagegen
+alle gelernten Werte.
 
 ## Was angelegt wird
 

@@ -23,7 +23,7 @@ class AR:
     def __init__(s,areas): s.areas=areas
     def async_get_area_by_name(s,n): return next((a for a in s.areas if a.name.lower()==n.lower()),None)
 class Ent:
-    def __init__(s,eid,area,platform="homematicip_cloud"): s.entity_id=eid; s.domain=eid.split(".")[0]; s.area_id=area; s.device_id=None; s.disabled_by=None; s.platform=platform; s.translation_key=None; s.original_name=None
+    def __init__(s,eid,area,platform="homematicip_cloud"): s.entity_id=eid; s.domain=eid.split(".")[0]; s.area_id=area; s.device_id=None; s.disabled_by=None; s.platform=platform; s.translation_key=None; s.original_name=None; s.unique_id=eid
 class ER:
     def __init__(s,ents): s.entities={e.entity_id:e for e in ents}
     def async_get(s,eid): return s.entities.get(eid)

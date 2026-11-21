@@ -19,6 +19,13 @@
         "data": {
           "calendars": "Calendars"
         }
+      },
+      "reconfigure": {
+        "title": "Change calendars",
+        "description": "Calendars visible to user {user}. If one is missing, share it with this user in Nextcloud first. Learned values and settings are kept.",
+        "data": {
+          "calendars": "Calendars"
+        }
       }
     },
     "error": {
@@ -29,7 +36,10 @@
       "unknown": "Unexpected error, see the log for details."
     },
     "abort": {
-      "already_configured": "This Nextcloud is already set up with this user."
+      "already_configured": "This Nextcloud is already set up with this user.",
+      "reconfigure_successful": "Calendar selection saved.",
+      "invalid_auth": "Username or app password no longer valid.",
+      "cannot_connect": "Nextcloud cannot be reached."
     }
   },
   "entity": {
@@ -87,7 +97,7 @@
         "name": "Status"
       },
       "global_boiler_flow": {
-        "name": "Boiler flow"
+        "name": "Boiler temperature"
       },
       "global_boiler_dhw": {
         "name": "Boiler hot water"

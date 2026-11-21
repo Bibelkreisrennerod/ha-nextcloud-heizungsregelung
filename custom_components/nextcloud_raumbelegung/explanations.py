@@ -104,9 +104,9 @@ EXPLANATIONS: dict[str, str] = {
         "mit den Räumen aus dem Attribut raeume."
     ),
     "global_boiler_state": "Betriebszustand des Kessels laut StokerCloud.",
-    "global_boiler_flow": "Vorlauftemperatur des Kessels laut StokerCloud.",
-    "global_boiler_dhw": "Warmwassertemperatur laut StokerCloud.",
-    "global_boiler_power": "Aktuelle Kesselleistung in Prozent laut StokerCloud.",
+    "global_boiler_flow": "Kesseltemperatur laut StokerCloud (Wasser im Kessel). Das ist nicht der Vorlauf an den Heizkörpern: dazwischen liegen Puffer und Mischer.",
+    "global_boiler_dhw": "Ist-Temperatur des Warmwassers laut StokerCloud.",
+    "global_boiler_power": "Aktuelle Kesselleistung in Prozent der Nennleistung. StokerCloud meldet kW, umgerechnet mit der Nennleistung des Kessels.",
     "global_boiler_updated": "Zeitpunkt der letzten Meldung des Kessels an StokerCloud.",
 }
 

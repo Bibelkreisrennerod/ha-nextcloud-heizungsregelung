@@ -10,6 +10,7 @@ lernen.
 | `test_plan.py [truth]` | Planung eines Sonntags bei 1, −7 und 7 °C; mit `truth` mit den wahren Parametern, sonst mit `learned.json` |
 | `test_controller.py auto\|calib\|observe\|history\|restart\|targets` | Steuerung mit nachgebildetem Home Assistant: Sonntag mit Automatik, Kalibrierlauf, Beobachten bei Automatik aus, Lernen aus 3 Tagen Recorder-Historie, Neustart während Kalibrierlauf und während des Aufheizens, Zieltemperatur je Termin (Regel „gottesdienst @ Saal = -1,5 K“, Temperatur-Tags, Tag für nicht gebuchten Raum wird gemeldet) |
 | `test_targets.py` | Regeln, Temperatur-Tags (Wort „Temperatur“ Pflicht, Raum nur wenn gebucht, unrealistische Werte), Tags aus CalDAV, Sollwert je Termin im Planer; Rückgabewert 1 bei Fehlern |
+| `test_stokercloud.py` | Auswertung einer StokerCloud-Antwort wie vom Kessel der Gemeinde: Kesseltemperatur, Warmwasser-Ist (nicht die Schaltdifferenz), Leistung in kW und Prozent der Nennleistung |
 
 Reihenfolge: erst `test_learn.py`, dann `test_plan.py`.
 

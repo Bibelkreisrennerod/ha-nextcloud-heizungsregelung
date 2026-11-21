@@ -123,7 +123,10 @@ class NextcloudRoomsConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
             errors["base"] = "no_selection"
 
-        schema = vol.Schema(
+        return self.async_show_form(step_id="calendars", data_schema=self._calendar_schema(), errors=errors)
+
+    def _calendar_schema(self) -> vol.Schema:
+        return vol.Schema(
             {
                 vol.Required(CONF_CALENDARS): SelectSelector(
                     SelectSelectorConfig(
@@ -137,7 +140,43 @@ class NextcloudRoomsConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
             }
         )
-        return self.async_show_form(step_id="calendars", data_schema=schema, errors=errors)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Kalenderauswahl aendern, ohne den Eintrag (und das Gelernte) zu loeschen."""
+        entry = self._get_reconfigure_entry()
+        current = list(entry.data.get(CONF_CALENDARS, []))
+        if not self._calendars:
+            client = NextcloudClient(
+                async_get_clientsession(self.hass),
+                entry.data[CONF_URL],
+                entry.data[CONF_USERNAME],
+                entry.data[CONF_PASSWORD],
+            )
+            try:
+                found = await client.async_discover_calendars()
+            except NextcloudAuthError:
+                return self.async_abort(reason="invalid_auth")
+            except (NextcloudError, ET.ParseError):
+                return self.async_abort(reason="cannot_connect")
+            # bisher gewaehlte Kalender bleiben sichtbar, auch wenn sie nicht mehr angeboten werden
+            urls = {cal["url"] for cal in found}
+            self._calendars = found + [cal for cal in current if cal["url"] not in urls]
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            chosen = [cal for cal in self._calendars if cal["url"] in user_input[CONF_CALENDARS]]
+            if chosen:
+                return self.async_update_reload_and_abort(entry, data_updates={CONF_CALENDARS: chosen})
+            errors["base"] = "no_selection"
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=self.add_suggested_values_to_schema(
+                self._calendar_schema(), {CONF_CALENDARS: [cal["url"] for cal in current]}
+            ),
+            errors=errors,
+            description_placeholders={"user": entry.data[CONF_USERNAME]},
+        )
 
 
 class NextcloudRoomsOptionsFlow(OptionsFlow):
