@@ -95,6 +95,9 @@ class RoomInput:
     # Zieltemperatur je Termin (gleiche Reihenfolge wie events); leer = ueberall comfort.
     # comfort selbst ist das Ziel des naechsten Termins, fuer den geplant wird.
     targets: list[float] = field(default_factory=list)
+    # Raumgruppe (durch Tueren verbunden); Waermeaustausch k aus params
+    group: str | None = None
+    door_open: float = 1.0  # Anteil der Zeit mit offenen Tueren (aus der Anpassung)
 
     def target(self, index: int) -> float:
         return self.targets[index] if index < len(self.targets) else self.comfort
@@ -192,15 +195,17 @@ def simulate(
     while moment < until:
         setpoints = [setpoint_at(r, plans.get(r.name, RoomPlan()), moment, idle) for r in rooms]
         out = outside(moment)
+        exchanges = [_exchange(i, rooms, params, temps) for i in range(len(rooms))]
         valves = [
-            valve(s, t, p.curve, hold_opening(p, t, out)) for s, t, p in zip(setpoints, temps, params)
+            valve(s, t, p.curve, hold_opening(p, t, out, x))
+            for s, t, p, x in zip(setpoints, temps, params, exchanges)
         ]
-        demand = sum(p.w * v for p, v in zip(params, valves))
+        demand = sum(p.demand(v) for p, v in zip(params, valves))
         supply, share = plant_step(demand, plant, state, STEP_H)
         energy += supply * STEP_H
         temps = [
-            room_step(t, p, delay.push(v * share), out, STEP_H)
-            for t, p, v, delay in zip(temps, params, valves, delays)
+            room_step(t, p, delay.push(p.heat(v) * share), out, STEP_H, x)
+            for t, p, v, delay, x in zip(temps, params, valves, delays, exchanges)
         ]
         moment += STEP
         for room, temp in zip(rooms, temps):
@@ -212,6 +217,20 @@ def simulate(
             if start is not None and moment > start and temp >= room.comfort - REACH_TOLERANCE:
                 reach[room.name] = moment
     return SimResult(reach, energy, peak)
+
+
+def _exchange(index: int, rooms: list[RoomInput], params: list[RoomParams], temps: list[float]) -> float:
+    """Waermeaustausch mit den Nachbarn (K/h). Ob die Tueren offen sein werden,
+    weiss die Planung nicht; sie rechnet mit dem Mittel aus der Anpassung
+    (Anteil der Zeit mit offenen Tueren). Abweichungen faengt der
+    Sicherheitszuschlag auf, der aus den tatsaechlichen Heizvorgaengen lernt."""
+    room, p = rooms[index], params[index]
+    if room.group is None or p.k <= 0:
+        return 0.0
+    others = [t for r, t in zip(rooms, temps) if r is not room and r.group == room.group]
+    if not others:
+        return 0.0
+    return p.k * room.door_open * (sum(others) / len(others) - temps[index])
 
 
 def _weight(priority: int) -> float:

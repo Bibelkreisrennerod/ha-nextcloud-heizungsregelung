@@ -24,7 +24,14 @@ _EFF={"Saal":(0.035,3.2,1.3,0.42),"Nebenraum (groß)":(0.07,4.0,0.35,0.15),"Nebe
 # Traegheit der Heizkoerper (h): Saal wie am 20.11.2026 gemessen (Boost: 10 min Totzeit, 35 min Traegheit)
 _TAU={"Saal":0.58,"Nebenraum (groß)":0.3,"Nebenraum (klein)":0.25,"Ehemaliger Sonntagsschulraum":0.25,"Küche":0.2,"Vorraum Küche 2":0.2}
 _EFF["Saal"]=(0.035,3.2,1.3,0.17)
-TRUE={r:P.RoomParams(a=a,b=b/TOP[r],w=w/TOP[r],d=d,curve=true_curve(TOP[r]),tau=_TAU[r]) for r,(a,b,w,d) in _EFF.items()}
+# Ventil -> Waerme (gamma) und Waermeaustausch mit Nachbarn bei offener Tuer (k, 1/h)
+_GAMMA={"Saal":0.8,"Nebenraum (groß)":0.75,"Nebenraum (klein)":0.85,"Ehemaliger Sonntagsschulraum":0.8,"Küche":0.9,"Vorraum Küche 2":0.8}
+_K={"Saal":0.08,"Küche":0.45,"Nebenraum (groß)":0.15,"Nebenraum (klein)":0.2,"Ehemaliger Sonntagsschulraum":0.15,"Vorraum Küche 2":0.25}
+GROUPS={"Saal":"Gruppe 1","Küche":"Gruppe 1","Nebenraum (groß)":"Gruppe 2","Nebenraum (klein)":"Gruppe 2","Ehemaliger Sonntagsschulraum":"Gruppe 2","Vorraum Küche 2":"Gruppe 2"}
+# b und w gelten bei der Hoechstoeffnung (wie bisher): je Einheit Waermeanteil umrechnen
+TRUE={r:P.RoomParams(a=a,b=b/TOP[r]**_GAMMA[r],w=w/TOP[r]**_GAMMA[r],d=d,curve=true_curve(TOP[r]),tau=_TAU[r],gamma=_GAMMA[r],k=_K[r]) for r,(a,b,w,d) in _EFF.items()}
+# Tuer Saal-Kueche: meist offen; zu in diesen Stunden ab Simulationsbeginn (wie bei Gottesdiensten)
+DOOR_CLOSED=[(24,27),(56,60)]
 VALVE_LAG=10/60  # h: Stellmotor folgt verzoegert
 KI=0.15  # I-Anteil des Homematic-Reglers: Ventil oeffnet je Stunde und Kelvin Abweichung so viel weiter
 def pi_valve(r,setpoint,temp,integral,dt):
@@ -36,23 +43,32 @@ def pi_valve(r,setpoint,temp,integral,dt):
 TPLANT=P.PlantParams(e_buf=0.7,t_start=0.3,p_max_kw=30)
 class World:
     def __init__(s,start):
-        s.t=start; s.temps={r:14.0 for r in ROOMS}; s.set={r:14.0 for r in ROOMS}; s.state=P.PlantState(TPLANT.e_buf); s.valves={r:0.0 for r in ROOMS}
+        s.t=start; s.start=start; s.boiler=0.0; s.temps={r:14.0 for r in ROOMS}; s.set={r:14.0 for r in ROOMS}; s.state=P.PlantState(TPLANT.e_buf); s.valves={r:0.0 for r in ROOMS}
         s.integral={r:0.0 for r in ROOMS}
         s.delays={r:P.Delay(TRUE[r].d,1/60,lag=TRUE[r].tau) for r in ROOMS}
     def outside(s,t):  # Tagesgang
         h=(t.hour+t.minute/60); return 3+4*math.sin((h-9)/24*2*math.pi)
+    def door(s,group):
+        if group!="Gruppe 1": return 1
+        hours=(s.t-s.start).total_seconds()/3600
+        return 0 if any(a<=hours<b for a,b in DOOR_CLOSED) else 1
     def step(s,minutes=1):
         dt=minutes/60
         for r in ROOMS:
             target,s.integral[r]=pi_valve(r,s.set[r],s.temps[r],s.integral[r],dt)
             s.valves[r]+=(target-s.valves[r])*min(1.0,dt/VALVE_LAG)
-        D=sum(TRUE[r].w*s.valves[r] for r in ROOMS)
+        D=sum(TRUE[r].demand(s.valves[r]) for r in ROOMS)
+        was_on,on_for=s.state.boiler_on,s.state.on_for
         sup,share=P.plant_step(D,TPLANT,s.state,dt)
+        s.boiler=1.0 if was_on and on_for>=TPLANT.t_start else 0.0  # gemessene Kesselleistung (Anteil)
         s.flow=20+50*share
         s.energy=getattr(s,'energy',0.0)+sup*dt
         out=s.outside(s.t)
+        before=dict(s.temps)
         for r in ROOMS:
-            s.temps[r]=P.room_step(s.temps[r],TRUE[r],s.delays[r].push(s.valves[r]*share),out,dt)
+            g=GROUPS[r]; others=[before[x] for x in ROOMS if x!=r and GROUPS[x]==g]
+            ex=TRUE[r].k*s.door(g)*(sum(others)/len(others)-before[r]) if others else 0.0
+            s.temps[r]=P.room_step(before[r],TRUE[r],s.delays[r].push(TRUE[r].heat(s.valves[r])*share),out,dt,ex)
         s.t+=timedelta(minutes=minutes)
     def reading(s,r):  # 0,1 K Aufloesung wie Homematic
         return round(s.temps[r]*10)/10
@@ -61,7 +77,7 @@ class Gauge:
     def update(s,valves,prior):
         plant=s.l.plant_params(s.p0)
         if s.state is None: s.state=P.PlantState(plant.e_buf)
-        D=sum(s.l.room_params(r,prior[r]).w*valves[r] for r in ROOMS)
+        D=sum(s.l.room_params(r,prior[r]).demand(valves[r]) for r in ROOMS)
         _,s.share=P.plant_step(D,plant,s.state,5/60)
         s.state.e=min(s.state.e,plant.e_buf)
         return s.state.e/plant.e_buf if plant.e_buf>0 else 0

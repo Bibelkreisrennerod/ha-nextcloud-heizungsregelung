@@ -59,7 +59,10 @@ from .const import (
     CONF_FLOW_SENSOR,
     CONF_OUTSIDE_SENSOR,
     CONF_STOKERCLOUD,
+    CONF_ROOM_GROUPS,
     CONF_TARGET_RULES,
+    DEFAULT_ROOM_GROUPS,
+    PRIOR_PREHEAT_MIN,
     CONF_WEATHER,
     CONTROL_INTERVAL,
     DEFAULT_WEATHER,
@@ -118,6 +121,14 @@ def _float(hass: HomeAssistant, entity_id: str | None) -> float | None:
         return float(state.state)
     except ValueError:
         return None
+
+
+def _room_key(name: str) -> str:
+    """Vergleichsform fuer Raumnamen (Gross/klein, Umlaute, Klammern egal)."""
+    text = name.casefold()
+    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+        text = text.replace(a, b)
+    return "".join(ch for ch in text if ch.isalnum())
 
 
 def _local(moment: datetime | None) -> str | None:
@@ -364,7 +375,7 @@ class HeatingController:
         return self.enabled(None) and self.enabled(room)
 
     def room_params(self, room: str) -> RoomParams:
-        return self.learner.room_params(room, self.setting(room, "preheat"))
+        return self.learner.room_params(room, PRIOR_PREHEAT_MIN)
 
     def plant_params(self) -> PlantParams:
         nominal = self._boiler_nominal_kw()
@@ -717,10 +728,41 @@ class HeatingController:
         return boiler.power / 100.0 * self._boiler_nominal_kw()
 
     def _flow(self) -> float | None:
-        value = _float(self.hass, self.entry.options.get(CONF_FLOW_SENSOR))
-        if value is None and self._boiler_fresh() is not None:
-            value = self.boiler.flow
-        return value
+        """Vorlauf an den Heizkoerpern, nur von einem eigens gewaehlten Sensor.
+
+        Die Kesseltemperatur aus StokerCloud ist kein Vorlauf: zwischen Kessel
+        und Heizkoerpern liegen Puffer und Mischer, die Heizkreise laufen nicht
+        ueber die Kesselsteuerung (Wetterfuehrung Zone 1/2 dort aus).
+        """
+        return _float(self.hass, self.entry.options.get(CONF_FLOW_SENSOR))
+
+    def _boiler_fraction(self) -> float | None:
+        """Kesselleistung als Anteil der Nennleistung (gemessene Energiezufuhr in den Puffer)."""
+        kw = self._boiler_kw()
+        if kw is None:
+            return None
+        return min(max(kw / self._boiler_nominal_kw(), 0.0), 1.5)
+
+    def _door_open(self, group: str | None) -> float:
+        """Anteil der Zeit mit offenen Tueren in der Gruppe laut letzter Anpassung."""
+        doors = (self.learner.fit_state or {}).get("doors") or {}
+        value = (doors.get(group) or {}).get("offen_anteil") if group else None
+        return float(value) if isinstance(value, (int, float)) else 1.0
+
+    def room_groups(self) -> dict[str, str]:
+        """Raum -> Gruppe der durch Tueren verbundenen Raeume (aus den Optionen)."""
+        text = self.entry.options.get(CONF_ROOM_GROUPS)
+        if text is None:
+            text = DEFAULT_ROOM_GROUPS
+        data = self.runtime.coordinator.data
+        known = {_room_key(room): room for room in (data.rooms if data else self.rooms)}
+        groups: dict[str, str] = {}
+        for number, line in enumerate(text.splitlines(), start=1):
+            members = [known[k] for k in (_room_key(x) for x in line.split(",")) if k in known]
+            if len(members) >= 2:
+                for room in members:
+                    groups.setdefault(room, f"Gruppe {number}")
+        return groups
 
     # ------------------------------------------------------------------ Takt
 
@@ -847,11 +889,13 @@ class HeatingController:
                 measured=info["valve_count"] > 0,
                 forced=info["boost"],
             )
-            prior[room] = self.setting(room, "preheat")
-            demand += self.room_params(room).w * (info["valve"] or 0.0)
-        # Pufferreserve fortschreiben; der Vorlauf korrigiert, wenn bekannt
+            prior[room] = PRIOR_PREHEAT_MIN
+            demand += self.room_params(room).demand(info["valve"] or 0.0)
+        # Pufferreserve fortschreiben (mit der gemessenen Kesselleistung, sonst
+        # mit dem Kesselmodell); ein echter Vorlauf-Sensor korrigiert, wenn bekannt
         self.gauge.e = min(self.gauge.e, plant.e_buf)
-        _, share = plant_step(demand, plant, self.gauge, SAMPLE_HOURS)
+        boiler = self._boiler_fraction()
+        _, share = plant_step(demand, plant, self.gauge, SAMPLE_HOURS, boiler)
         measured = flow_share(flow, self.learner.flow_full)
         if measured is not None and measured < 0.95:
             self.gauge.e = min(self.gauge.e, 0.25 * plant.e_buf * measured)
@@ -872,6 +916,7 @@ class HeatingController:
             calibration,
             flow,
             share,
+            boiler,
         )
         if self.learner.plant.episodes != episodes:
             self._force_plan = True  # neue Parameter
@@ -891,8 +936,8 @@ class HeatingController:
         learner = self.learner
         try:
             plant = PlantParams(p_max_kw=self._boiler_nominal_kw())
-            prior = {room: self.setting(room, "preheat") for room in learner.rooms}
-            data = learner.prepare_fit(now, plant, prior)
+            prior = {room: PRIOR_PREHEAT_MIN for room in learner.rooms}
+            data = learner.prepare_fit(now, plant, prior, self.room_groups())
             # Testlaeufe fuer die kaelteste Stunde der naechsten 24 h bewerten
             ahead = [v for t, v in self._forecast if now <= t <= now + timedelta(hours=24)]
             cold = min(ahead) if ahead else outside
@@ -949,9 +994,8 @@ class HeatingController:
             outside_id = self.entry.options.get(CONF_OUTSIDE_SENSOR) or self.entry.options.get(
                 CONF_WEATHER, DEFAULT_WEATHER
             )
-            flow_id = self.entry.options.get(CONF_FLOW_SENSOR) or er.async_get(self.hass).async_get_entity_id(
-                "sensor", DOMAIN, f"{self.entry.entry_id}_global_boiler_flow"
-            )
+            # nur ein echter Vorlauf-Sensor; die Kesseltemperatur ist kein Vorlauf
+            flow_id = self.entry.options.get(CONF_FLOW_SENSOR)
             entity_ids = sorted(
                 {e for climates, valves in sources.values() for e in climates + valves}
                 | {e for e in (outside_id, flow_id) if e}
@@ -1008,7 +1052,7 @@ class HeatingController:
                 previous = old.rooms.get(room)
                 if previous is not None:
                     stats.ratios, stats.cycles = list(previous.ratios), previous.cycles
-            prior = {room: self.setting(room, "preheat") for room in sources}
+            prior = {room: PRIOR_PREHEAT_MIN for room in sources}
             result = await self.hass.async_add_executor_job(
                 replay, fresh, rooms, outside, flow, start, end, prior, PlantParams(p_max_kw=self._boiler_nominal_kw())
             )
@@ -1045,6 +1089,7 @@ class HeatingController:
     def _plan_inputs(self, now: datetime, infos: dict[str, dict[str, Any]], setback: float) -> list[RoomInput]:
         inputs = []
         calibration_rooms = self._calibration_rooms()
+        groups = self.room_groups()
         for room, info in infos.items():
             if not info["climates"] or info["temp"] is None:
                 continue
@@ -1083,6 +1128,8 @@ class HeatingController:
                     fixed=fixed,
                     committed=committed,
                     valve=info["valve"],
+                    group=groups.get(room),
+                    door_open=self._door_open(groups.get(room)),
                 )
             )
         return inputs
@@ -1575,6 +1622,10 @@ class HeatingController:
                 "totzeit_min": None if d is None else round(d * 60),
                 "traegheit_prozent": percent(f"{room}|tau"),
                 "leistungsbedarf_prozent": percent(f"{room}|w"),
+                "ventil_waerme_gamma": (fit.get("values") or {}).get(f"{room}|gamma"),
+                "gamma_unsicherheit": sigma.get(f"{room}|gamma"),
+                "austausch_nachbarn_pro_h": (fit.get("values") or {}).get(f"{room}|k"),
+                "austausch_unsicherheit_pro_h": sigma.get(f"{room}|k"),
                 "aufheizdauer_prozent": round(100 * (fit.get("duration_sigma") or {}).get(room, 0.0)),
             }
         return {
@@ -1587,6 +1638,8 @@ class HeatingController:
             "rooms": rooms,
             "experiments": fit.get("experiments"),
             "outside": fit.get("outside"),
+            "grenzen": fit.get("limits") or [],
+            "tueren": fit.get("doors") or {},
         }
 
     def _global_status(self, now: datetime, outside: float | None, flow: float | None, duty: float | None) -> dict[str, Any]:
@@ -1619,6 +1672,7 @@ class HeatingController:
             "automatik": self.enabled(None),
             "aussen": outside,
             "vorlauf": flow,
+            "kesseltemperatur": self.boiler.flow if self._boiler_fresh() is not None else None,
             "kessel_aktuell": self._boiler_fresh() is not None,
             "duty_cycle": duty,
             "heizen": heating,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -65,6 +67,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Eintrag einrichten."""
     _remove_old_entities(hass, entry)
+    _tidy_entity_ids(hass, entry)
     coordinator = RoomCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
     runtime = RuntimeData(coordinator=coordinator)
@@ -85,6 +88,41 @@ def _remove_old_entities(hass: HomeAssistant, entry: ConfigEntry) -> None:
     for item in er.async_entries_for_config_entry(registry, entry.entry_id):
         if any(item.unique_id.endswith(f"_{key}") for key in REMOVED_SETTINGS):
             registry.async_remove(item.entity_id)
+
+
+_DOUBLED = re.compile(r"^(?P<room>.+?)_(?P=room)_(?P<rest>.+)$")
+
+
+def _tidy_entity_id(entity_id: str) -> str | None:
+    """Neue Entitaets-ID fuer frueher doppelt benannte Entitaeten, sonst None.
+
+    sensor.saal_saal_warm_um_prognose -> sensor.saal_warm_um_prognose
+    sensor.heizungssteuerung_kessel_vorlauf -> sensor.kessel_temperatur (Geraet "Kessel")
+    """
+    domain, _, object_id = entity_id.partition(".")
+    if object_id.startswith("heizungssteuerung_kessel_"):
+        rest = object_id.removeprefix("heizungssteuerung_kessel_")
+        return f"{domain}.kessel_{'temperatur' if rest == 'vorlauf' else rest}"
+    match = _DOUBLED.match(object_id)
+    if match:
+        return f"{domain}.{match.group('room')}_{match.group('rest')}"
+    return None
+
+
+def _tidy_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Doppelte Raumnamen und alte Kessel-Namen aus den Entitaets-IDs entfernen.
+
+    Der Recorder uebernimmt den Verlauf zur neuen ID. Ist die neue ID schon
+    vergeben, bleibt die alte.
+    """
+    registry = er.async_get(hass)
+    for item in list(er.async_entries_for_config_entry(registry, entry.entry_id)):
+        new_id = _tidy_entity_id(item.entity_id)
+        if new_id is None or new_id == item.entity_id or registry.async_get(new_id) is not None:
+            continue
+        if hass.states.get(new_id) is not None:
+            continue
+        registry.async_update_entity(item.entity_id, new_entity_id=new_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

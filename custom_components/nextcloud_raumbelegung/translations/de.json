@@ -63,9 +63,6 @@
       }
     },
     "number": {
-      "preheat": {
-        "name": "Vorheizzeit Startwert"
-      },
       "comfort": {
         "name": "Komforttemperatur"
       },
@@ -101,19 +98,19 @@
         "name": "Status"
       },
       "global_boiler_flow": {
-        "name": "Kesseltemperatur"
+        "name": "Temperatur"
       },
       "global_boiler_dhw": {
-        "name": "Kessel Warmwasser"
+        "name": "Warmwasser"
       },
       "global_boiler_power": {
-        "name": "Kessel Leistung"
+        "name": "Leistung"
       },
       "global_boiler_updated": {
-        "name": "Kessel letzte Meldung"
+        "name": "Letzte Meldung"
       },
       "global_boiler_state": {
-        "name": "Kessel Status"
+        "name": "Status"
       },
       "warm_at": {
         "name": "Warm um (Prognose)"
@@ -140,10 +137,10 @@
         "name": "Pufferkapazität"
       },
       "global_boiler_rated": {
-        "name": "Kessel-Dauerleistung"
+        "name": "Dauerleistung"
       },
       "global_boiler_startup": {
-        "name": "Kessel-Anlaufzeit"
+        "name": "Anlaufzeit"
       },
       "global_calibration": {
         "name": "Kalibrierung"
@@ -173,11 +170,13 @@
           "outside_sensor": "Außentemperatur (statt Wetter)",
           "duty_cycle_sensor": "Duty Cycle Access Point",
           "stokercloud_name": "StokerCloud-Anlagenname (nur lesen)",
-          "target_rules": "Zieltemperatur je Termin (Regeln)"
+          "target_rules": "Zieltemperatur je Termin (Regeln)",
+          "room_groups": "Durch Türen verbundene Räume"
         },
         "data_description": {
           "stokercloud_name": "Name aus der Adresse der öffentlichen Ansicht, z. B. „nawatec“ bei stokercloud.dk/dev/nawatec.html. Kein Passwort nötig. Ein gewählter Vorlauf-Sensor hat Vorrang.",
-          "target_rules": "Eine Regel je Zeile: „Stichwort @ Raum = Wert“. Das Stichwort wird im Titel und in den Tags gesucht, Groß-/Kleinschreibung egal. „@ Raum“ ist optional (mehrere mit Komma). Wert mit Vorzeichen oder K ist relativ zur Komforttemperatur, sonst absolut (erlaubt 15–25 °C bzw. höchstens 5 K), z. B. „gottesdienst @ Saal = -1,5 K“ oder „jugend = 20“. Die erste passende Regel gilt. Ein Temperatur-Tag im Termin („Temperatur 20“ oder „Temperatur Saal 20 °C“) geht jeder Regel vor."
+          "target_rules": "Eine Regel je Zeile: „Stichwort @ Raum = Wert“. Das Stichwort wird im Titel und in den Tags gesucht, Groß-/Kleinschreibung egal. „@ Raum“ ist optional (mehrere mit Komma). Wert mit Vorzeichen oder K ist relativ zur Komforttemperatur, sonst absolut (erlaubt 15–25 °C bzw. höchstens 5 K), z. B. „gottesdienst @ Saal = -1,5 K“ oder „jugend = 20“. Die erste passende Regel gilt. Ein Temperatur-Tag im Termin („Temperatur 20“ oder „Temperatur Saal 20 °C“) geht jeder Regel vor.",
+          "room_groups": "Eine Gruppe je Zeile, Räume mit Komma getrennt, z. B. „Saal, Küche“. Zwischen den Räumen einer Gruppe lernt die Integration den Wärmeaustausch und schätzt, wann die Türen offen waren. Räume ohne Gruppe gelten als abgetrennt."
         }
       }
     },

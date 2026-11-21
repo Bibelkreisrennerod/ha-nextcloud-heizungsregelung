@@ -11,10 +11,6 @@ EXPLANATIONS: dict[str, str] = {
         "Wirkt nur, wenn die globale Automatik an ist."
     ),
     "comfort": "Zieltemperatur während eines Termins. Der Raum soll sie zu Terminbeginn erreicht haben. Einzelne Termine können abweichen: ein Tag mit dem Wort „Temperatur“ im Termin („Temperatur 20“, „Temperatur Saal 20 °C“; ohne Raum für alle gebuchten Räume) oder eine Regel in den Optionen der Integration (z. B. „gottesdienst @ Saal = -1,5 K“). Erlaubt sind 15–25 °C und nur gebuchte Räume; andere Tags werden übergangen und gemeldet.",
-    "preheat": (
-        "Schätzung, wie lange der Raum allein von 14 auf 21 °C braucht (bei 0 °C aussen). "
-        "Nur Startannahme: Sobald der Raum in einer Modellanpassung war, gelten die gelernten Werte."
-    ),
     "priority": (
         "1 = am wichtigsten. Reicht die Kesselleistung nicht für alle, wird der Raum mit der kleineren "
         "Zahl zuerst warm; Räume mit größerer Zahl müssen notfalls warten."
@@ -86,7 +82,7 @@ EXPLANATIONS: dict[str, str] = {
         "Wie lange der Puffer zusammen mit dem Kessel mehr Leistung liefern kann, als der Kessel allein schafft, "
         "umgerechnet in kWh. Gelernt aus Heizphasen, in denen der Puffer leer lief."
     ),
-    "global_boiler_rated": "Dauerleistung des Kessels (aus StokerCloud oder 30 kW); Bezug für den Leistungsbedarf der Räume.",
+    "global_boiler_rated": "Höchste in letzter Zeit gemessene Kesselleistung in kW (StokerCloud). Nur zur Anzeige; das Modell rechnet in Anteilen der Nennleistung.",
     "global_boiler_startup": "Wie lange der Kessel nach dem Anfordern braucht, bis er Leistung liefert.",
     "global_calibration": (
         "Stand des Kalibrierlaufs (Dienst kalibrierlauf): 'kein Lauf', 'wartet auf Ruhe' (90 min, bis der Puffer "
@@ -95,7 +91,10 @@ EXPLANATIONS: dict[str, str] = {
     "global_model_fit": (
         "Mittlerer Fehler (K), mit dem das Modell bei der letzten täglichen Anpassung die gemessenen "
         "Raumtemperaturen 30, 60 und 120 min voraus nachgerechnet hat. Unter 0,2 K gut, über 0,5 K stimmt "
-        "das Modell noch nicht. Die Attribute zeigen je Raum die Unsicherheit der gelernten Werte."
+        "das Modell noch nicht. Die Attribute zeigen je Raum die Unsicherheit der gelernten Werte, "
+        "gamma (Ventilstellung → Wärme) und den Wärmeaustausch mit den Nachbarräumen; „tueren“: wie "
+        "oft die Türen einer Raumgruppe laut Schätzung offen waren; „grenzen“: Werte, die an einer "
+        "Plausibilitätsgrenze gebremst wurden."
     ),
     "global_test_run": (
         "Der Kalibrierlauf, der die Unsicherheit der gelernten Werte am stärksten verkleinern würde, "
@@ -103,7 +102,7 @@ EXPLANATIONS: dict[str, str] = {
         "der noch möglichen Werte schrumpft um den Faktor e (2,7). Starten über den Dienst kalibrierlauf "
         "mit den Räumen aus dem Attribut raeume."
     ),
-    "global_boiler_state": "Betriebszustand des Kessels laut StokerCloud.",
+    "global_boiler_state": "Betriebszustand des Kessels: Störung (Alarm gemeldet), aus, heizt (Leistung über 0) oder in Bereitschaft (läuft, Leistung 0). Attribut „code“ ist die Nummer von StokerCloud (z. B. state_7), deren Bedeutung NBE nicht veröffentlicht.",
     "global_boiler_flow": "Kesseltemperatur laut StokerCloud (Wasser im Kessel). Das ist nicht der Vorlauf an den Heizkörpern: dazwischen liegen Puffer und Mischer.",
     "global_boiler_dhw": "Ist-Temperatur des Warmwassers laut StokerCloud.",
     "global_boiler_power": "Aktuelle Kesselleistung in Prozent der Nennleistung. StokerCloud meldet kW, umgerechnet mit der Nennleistung des Kessels.",

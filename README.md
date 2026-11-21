@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.5.3. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.6.0. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -53,9 +53,9 @@ Nextcloud direkt ab.
   geänderten Terminen oder Einstellungen, neuen gelernten Werten, spätestens
   nach 3 Stunden, oder wenn ein Raum zu spät käme.
 - **Lernen:** Alle 5 Minuten ein Messpunkt (Raumtemperatur, Ventilstellung,
-  Außentemperatur, Vorlauf). Auskühlphasen ergeben den Wärmeverlust,
-  Heizphasen Aufheizrate, Leistungsbedarf und Pufferreserve. Der Vorlauf
-  zeigt direkt, welchen Anteil ihres Bedarfs die Räume bekommen. Ein
+  Außentemperatur, Kesselleistung, Vorlauf falls ein eigener Sensor gewählt
+  ist). Auskühlphasen ergeben den Wärmeverlust, Heizphasen Aufheizrate,
+  Leistungsbedarf und Pufferreserve. Ein
   Sicherheitszuschlag passt sich so an, dass rund 95 % der Termine pünktlich
   warm sind (Start 25 %). Gelernt wird auch bei ausgeschalteter Automatik,
   dann aus dem Homematic-Profil.
@@ -66,8 +66,8 @@ Nextcloud direkt ab.
   verwirft dabei die bisher gelernten Werte.
 - **Gemeinsame Anpassung (ab 0.4):** Einmal am Tag, in einer Ruhephase,
   passt die Integration alle Werte gemeinsam an die neuen Messpunkte an:
-  Auskühlrate, Aufheizrate, Totzeit und Leistungsbedarf je Raum sowie die
-  Pufferreserve. Gesucht werden die Werte, mit denen das Modell die
+  Auskühlrate, Aufheizrate, Totzeit, Trägheit und Leistungsbedarf je Raum
+  sowie die Pufferreserve. Gesucht werden die Werte, mit denen das Modell die
   gemessenen Verläufe 30, 60 und 120 Minuten voraus am besten nachrechnet
   (Systemidentifikation mit Grey-Box-Modell, Levenberg-Marquardt). Das
   Ergebnis der letzten Anpassung geht als Vorwissen ein und verliert je Tag
@@ -77,6 +77,32 @@ Nextcloud direkt ab.
   Attribut an den Sensoren und bestimmt den Sicherheitszuschlag
   (95 % der Aufheizdauern). Die Rechnung läuft im Hintergrund und dauert
   für einen Tag unter einer Sekunde.
+- **Ab 0.6:**
+  - **Ventilstellung → Wärme je Raum (gamma):** Ein halb offenes Ventil gibt
+    mehr als die halbe Wärme ab (Boost im Saal: etwa 0,8). Wärme = Öffnung
+    hoch gamma, gelernt je Raum, Startwert 0,8.
+  - **Nachbarräume:** Räume, die durch Türen verbunden sind (Option
+    „Durch Türen verbundene Räume“, eine Gruppe je Zeile), tauschen Wärme aus.
+    Die Anpassung lernt je Raum, wie stark (k in 1/h), und schätzt für jede
+    halbe Stunde, ob die Türen der Gruppe offen oder zu waren (Viterbi,
+    Wechsel kosten etwas, im Zweifel offen). Die Planung rechnet mit dem
+    Anteil der Zeit, in der die Türen offen waren, und nutzt k nur, soweit die
+    Messungen ihn sicher belegen (untere 95-%-Grenze). Voreingestellt für die
+    Gemeinde: „Saal, Küche“ und „Nebenraum (groß), Nebenraum (klein),
+    Ehemaliger Sonntagsschulraum, Vorraum Küche 2, Küche 2“.
+  - **Plausibilitätsgrenzen:** Werte, die physikalisch nicht passen (bei der
+    Höchstöffnung schneller als 10 K/h, mehr als das 1,5-Fache der
+    Kesselleistung, bei 20 K Unterschied nach außen nicht zu halten), bremst
+    ein Strafterm; sie stehen im Attribut `grenzen` der „Modellanpassung“.
+  - **Kesseldaten richtig gedeutet:** Die Kesseltemperatur aus StokerCloud
+    ist kein Vorlauf (Puffer und Mischer liegen dazwischen; die Heizkreise
+    laufen nicht über die Kesselsteuerung) und wird nicht mehr als Vorlauf
+    verwendet; frühere so gespeicherte Werte werden verworfen. Die
+    Kesselleistung (kW) geht als gemessene Energiezufuhr in den Puffer ein,
+    in der Anpassung und in der Pufferreserve. Ein echter Vorlauf-Sensor kann
+    weiterhin in den Optionen gewählt werden.
+  - **„Vorheizzeit Startwert“ entfällt:** Bis zur ersten Anpassung gilt
+    intern 120 Minuten (14 → 21 °C allein bei 0 °C außen).
 - **Empfohlener Testlauf:** Nach jeder Anpassung rechnet die Integration
   für mögliche Kalibrierläufe (jeder Raum allein, der größte Raum mit jedem
   anderen, alle außer dem größten, alle zusammen) aus, wie stark sie die
@@ -94,10 +120,12 @@ Nextcloud direkt ab.
   90 Minuten lang kein Raum aufgeheizt hat, und gibt die Räume danach zurück.
 - **Kesseldaten (optional):** Mit dem StokerCloud-Anlagennamen (z. B.
   „nawatec“ aus `stokercloud.dk/dev/nawatec.html`) liest die Integration
-  Vorlauf, Warmwasser, Leistung und Status des NBE-Kessels, nur lesend und
-  ohne Passwort. Werte, die älter als 30 Minuten sind, werden ignoriert;
-  liefert der Kessel länger als 2 Stunden keine Daten, gibt es eine Meldung.
-  Ein ausdrücklich gewählter Vorlauf-Sensor hat Vorrang.
+  Kesseltemperatur, Warmwasser, Leistung und Status des NBE-Kessels, nur
+  lesend und ohne Passwort, am eigenen Gerät „Kessel“. Werte, die älter als
+  30 Minuten sind, werden ignoriert; liefert der Kessel länger als 2 Stunden
+  keine Daten, gibt es eine Meldung. Der Status zeigt „heizt“, „in
+  Bereitschaft“, „aus“ oder „Störung“; die Nummer von StokerCloud (z. B.
+  `state_7`) steht im Attribut `code`.
 - **Funkkontingent:** Sie sendet nur echte Änderungen, höchstens alle
   3 Minuten je Raum. Ist der Duty Cycle des Homematic Access Points über
   70 %, sendet sie nur noch Aufheiz-Befehle. Meldet der Access Point keinen
@@ -195,22 +223,29 @@ Je Raum ein Gerät:
 | Modell kalibriert | An, wenn der Vorhersagefehler unter 0,5 K liegt |
 | Heizprotokoll | Letzte Heizvorgänge mit Start, erreicht um, Abweichung zur Frist |
 | Komforttemperatur | Zieltemperatur während Terminen (Standard 21 °C) |
-| Vorheizzeit Startwert | Wie lange der Raum allein von 14 auf 21 °C braucht, bei 0 °C außen; gilt, bis gemessen wurde (Standard 120 min) |
 | Priorität | 1 = am wichtigsten; entscheidet, wenn die Zeit nicht für alle reicht |
 | Automatik | Aus: Thermostate dieses Raums werden nicht gesteuert (auch nicht vom Kalibrierlauf) |
 
 Dazu ein Gerät „Heizungssteuerung“ mit Status (Attribut `plan`),
-Pufferreserve, Pufferkapazität, Kessel-Dauerleistung, Kessel-Anlaufzeit,
+Pufferreserve, Pufferkapazität,
 Kalibrierung (letzte Auswertung als Attribut), Modellanpassung (mittlerer
 Vorhersagefehler, Unsicherheiten je Raum), Empfohlener Testlauf,
 Absenktemperatur (14 °C) und
 dem globalen Schalter „Automatik“ (bei neuer Einrichtung aus). In den Optionen der Integration lassen
-sich Wetter-Entität, Vorlauf-Sensor, Außentemperatur-Sensor,
+sich Wetter-Entität, Vorlauf-Sensor (nur ein echter Vorlauf an den
+Heizkörpern), Außentemperatur-Sensor,
 Duty-Cycle-Sensor, StokerCloud-Anlagenname und die Regeln für die
 Zieltemperatur je Termin wählen.
 
-Lastgewicht, Lastbudget und Vorlauf-Schwelle aus Version 0.2 gibt es nicht
-mehr; die Entitäten werden beim Update entfernt.
+und ein Gerät „Kessel“ mit Temperatur, Warmwasser, Leistung, letzter
+Meldung, Status, Dauerleistung und Anlaufzeit.
+
+Lastgewicht, Lastbudget und Vorlauf-Schwelle aus Version 0.2 und
+„Vorheizzeit Startwert“ aus 0.5 gibt es nicht mehr; die Entitäten werden
+beim Update entfernt. Ab 0.6 werden Entitäts-IDs mit doppeltem Raumnamen
+(`sensor.saal_saal_warm_um_prognose`) und die Kessel-IDs
+(`sensor.heizungssteuerung_kessel_…` → `sensor.kessel_…`, Vorlauf →
+`sensor.kessel_temperatur`) beim Start umbenannt; der Verlauf bleibt erhalten.
 
 Räume werden aus den in Nextcloud angelegten Ressourcen und aus den Terminen
 selbst übernommen. Neue Räume erscheinen automatisch. Die Attribute der

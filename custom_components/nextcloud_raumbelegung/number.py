@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from homeassistant.components.number import NumberDeviceClass, NumberMode, RestoreNumber
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, UnitOfTemperature, UnitOfTime
+from homeassistant.const import EntityCategory, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -27,7 +27,6 @@ class Spec:
 
 ROOM_SPECS = {
     "comfort": Spec(10, 26, 0.5, UnitOfTemperature.CELSIUS, NumberDeviceClass.TEMPERATURE, False),
-    "preheat": Spec(0, 720, 5, UnitOfTime.MINUTES, NumberDeviceClass.DURATION),
     "priority": Spec(1, 9, 1),
 }
 GLOBAL_SPECS = {

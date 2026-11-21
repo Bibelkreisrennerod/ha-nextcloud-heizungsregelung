@@ -30,7 +30,9 @@ from .const import (
     CONF_CALENDARS,
     CONF_DUTY_CYCLE_SENSOR,
     CONF_STOKERCLOUD,
+    CONF_ROOM_GROUPS,
     CONF_TARGET_RULES,
+    DEFAULT_ROOM_GROUPS,
     CONF_FLOW_SENSOR,
     CONF_OUTSIDE_SENSOR,
     CONF_WEATHER,
@@ -194,6 +196,7 @@ class NextcloudRoomsOptionsFlow(OptionsFlow):
             else:
                 return self.async_create_entry(data=user_input)
         options = user_input if user_input is not None else self.config_entry.options
+        options = {CONF_ROOM_GROUPS: DEFAULT_ROOM_GROUPS, **options}
         sensor = EntitySelector(EntitySelectorConfig(domain="sensor"))
         schema = vol.Schema(
             {
@@ -205,6 +208,7 @@ class NextcloudRoomsOptionsFlow(OptionsFlow):
                 vol.Optional(CONF_OUTSIDE_SENSOR): sensor,
                 vol.Optional(CONF_DUTY_CYCLE_SENSOR): sensor,
                 vol.Optional(CONF_TARGET_RULES): TextSelector(TextSelectorConfig(multiline=True)),
+                vol.Optional(CONF_ROOM_GROUPS): TextSelector(TextSelectorConfig(multiline=True)),
             }
         )
         return self.async_show_form(

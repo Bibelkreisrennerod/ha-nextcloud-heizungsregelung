@@ -2,11 +2,17 @@
 
 Raeume (je Raum r, Zeit in Stunden):
 
-    dT_r/dt = b_r * u_r(t - d_r) - a_r * (T_r - T_aussen)
+    dT_r/dt = b_r * h_r(t - d_r) - a_r * (T_r - T_aussen) + k_r * o_g * (Tn_r - T_r)
 
     a_r  Auskuehlkonstante (1/h): Waermeverlust / Waermespeicher des Raums
     b_r  Aufheizrate bei offenen Ventilen und voller Versorgung (K/h)
-    u_r  tatsaechliche Versorgung, 0..1 = Ventilstellung x Versorgungsanteil
+    h_r  gelieferte Waerme, 0..1 = Ventilstellung^gamma_r x Versorgungsanteil.
+         gamma_r < 1: ein halb offenes Ventil gibt mehr als die halbe Waerme
+         ab (Boost im Saal am 20.11.2026: etwa 0,8)
+    k_r  Waermeaustausch mit den Nachbarraeumen der Gruppe (1/h), Tn_r deren
+         mittlere Temperatur, o_g Tuerzustand der Gruppe (1 offen, 0 zu; wird
+         in der Anpassung je halbe Stunde geschaetzt, in der Planung zaehlt
+         vorsichtig nur der Verlust)
     d_r  Totzeit (h): so lange dauert es, bis Waerme aus geoeffneten Ventilen
          am Temperaturfuehler ankommt (Heizkoerper aufwaermen, Luft umwaelzen)
 
@@ -79,6 +85,18 @@ class RoomParams:
     tau: float = 0.0
     # Ventilstellung 0..1 an den Stuetzstellen CURVE_DEV; None = PRIOR_SHAPE
     curve: tuple[float, ...] | None = None
+    # Ventilstellung -> Waerme: Anteil = Oeffnung ** gamma (1.0 = proportional)
+    gamma: float = 1.0
+    # Waermeaustausch mit den Nachbarraeumen (1/h) bei offenen Tueren
+    k: float = 0.0
+
+    def heat(self, opening: float) -> float:
+        """Anteil der vollen Heizkoerperleistung bei dieser Ventilstellung."""
+        return opening**self.gamma if opening > 0 else 0.0
+
+    def demand(self, opening: float) -> float:
+        """Leistungsbedarf (Vielfache der Kessel-Dauerleistung) bei dieser Ventilstellung."""
+        return self.w * self.heat(opening)
 
     def heat_loss(self, delta: float = 20.0) -> float:
         """Temperaturverlust in K/h bei 'delta' Kelvin Unterschied nach aussen."""
@@ -146,24 +164,41 @@ def valve(
     return min(max(opening, 0.0), max(points))
 
 
-def hold_opening(params: RoomParams, temp: float, outside: float) -> float:
-    """Ventilstellung, mit der die Temperatur gerade gehalten wird."""
-    return params.a * (temp - outside) / params.b if params.b > 0 else 0.0
+def hold_opening(params: RoomParams, temp: float, outside: float, exchange: float = 0.0) -> float:
+    """Ventilstellung, mit der die Temperatur gerade gehalten wird.
+
+    exchange: Waermeaustausch mit den Nachbarn (K/h, negativ = Verlust); den
+    gleicht der I-Anteil des Thermostats genauso aus wie den Verlust nach aussen.
+    """
+    if params.b <= 0:
+        return 0.0
+    needed = (params.a * (temp - outside) - exchange) / params.b  # Waermeanteil
+    if needed <= 0:
+        return 0.0
+    return needed ** (1.0 / params.gamma) if params.gamma > 0 else needed
 
 
 def plant_step(
-    demand: float, plant: PlantParams, state: PlantState, dt: float
+    demand: float, plant: PlantParams, state: PlantState, dt: float, measured: float | None = None
 ) -> tuple[float, float]:
     """Kessel und Puffer um dt Stunden fortschreiben.
 
+    measured: tatsaechliche Kesselleistung (Anteil der Nennleistung, StokerCloud);
+    ohne sie springt der Kessel im Modell an, wenn der Puffer unter 90 % faellt.
     Liefert (gelieferte Leistung, Versorgungsanteil 0..1) und veraendert state.
     """
     if plant.e_buf <= 0:
         state.e = 0.0
-    if not state.boiler_on and state.e < 0.9 * plant.e_buf:
-        state.boiler_on = True
-        state.on_for = 0.0
-    boiler = 1.0 if state.boiler_on and state.on_for >= plant.t_start else 0.0
+    if measured is not None:
+        boiler = max(measured, 0.0)
+        if (boiler > 0.02) != state.boiler_on:
+            state.boiler_on = boiler > 0.02
+            state.on_for = 0.0
+    else:
+        if not state.boiler_on and state.e < 0.9 * plant.e_buf:
+            state.boiler_on = True
+            state.on_for = 0.0
+        boiler = 1.0 if state.boiler_on and state.on_for >= plant.t_start else 0.0
     # Je leerer der Puffer, desto kaelter der Vorlauf: im unteren Viertel
     # deckt er die Luecke zum Kessel nur noch anteilig.
     quality = min(max(state.e / (0.25 * plant.e_buf), 0.0), 1.0) if plant.e_buf > 0 else 0.0
@@ -175,7 +210,7 @@ def plant_step(
     state.e = min(max(state.e + (boiler - supply) * dt, 0.0), plant.e_buf)
     if state.boiler_on:
         state.on_for += dt
-        if state.e >= plant.e_buf - 1e-9 and demand < 1.0:
+        if measured is None and state.e >= plant.e_buf - 1e-9 and demand < 1.0:
             state.boiler_on = False
     return supply, share
 
@@ -206,9 +241,12 @@ class Delay:
         return self._state
 
 
-def room_step(temp: float, params: RoomParams, supply: float, outside: float, dt: float) -> float:
-    """Raumtemperatur um dt Stunden fortschreiben (supply = u_r, 0..1)."""
-    return temp + (params.b * supply - params.a * (temp - outside)) * dt
+def room_step(
+    temp: float, params: RoomParams, supply: float, outside: float, dt: float, exchange: float = 0.0
+) -> float:
+    """Raumtemperatur um dt Stunden fortschreiben (supply = h_r, 0..1;
+    exchange = Waermeaustausch mit Nachbarn in K/h)."""
+    return temp + (params.b * supply - params.a * (temp - outside) + exchange) * dt
 
 
 def solo_minutes(
@@ -225,8 +263,8 @@ def solo_minutes(
     delay = Delay(params.d, dt, lag=params.tau)
     while temp < t_to - REACH_TOLERANCE and minutes < limit:
         opening = valve(t_to, temp, params.curve, hold_opening(params, temp, outside))
-        _, share = plant_step(params.w * opening, plant, state, dt)
-        temp = room_step(temp, params, delay.push(opening * share), outside, dt)
+        _, share = plant_step(params.demand(opening), plant, state, dt)
+        temp = room_step(temp, params, delay.push(params.heat(opening) * share), outside, dt)
         minutes += 5
     return minutes
 
@@ -241,12 +279,14 @@ def _b_for(
     d: float,
     curve: tuple[float, ...] | None,
     tau: float = 0.0,
+    gamma: float = 1.0,
 ) -> float:
     plant = PlantParams(e_buf=e_buf, t_start=t_start)
     low, high = 0.05, 200.0
     for _ in range(40):
         mid = (low + high) / 2
-        if solo_minutes(RoomParams(a=a, b=mid, w=w, d=d, curve=curve, tau=tau), plant, limit=minutes + 60) > minutes:
+        trial = RoomParams(a=a, b=mid, w=w, d=d, curve=curve, tau=tau, gamma=gamma)
+        if solo_minutes(trial, plant, limit=minutes + 60) > minutes:
             low = mid
         else:
             high = mid
@@ -261,13 +301,14 @@ def b_for_minutes(
     d: float = 0.0,
     curve: tuple[float, ...] | None = None,
     tau: float = 0.0,
+    gamma: float = 1.0,
 ) -> float:
     """Aufheizrate b, mit der ein Raum allein in 'minutes' von 14 auf 21 Grad
     kommt (bei 0 Grad aussen, voller Puffer, mit Kessel- und Pufferbegrenzung).
 
-    So bedeutet der Startwert "Vorheizzeit" fuer jeden Raum dasselbe wie in
-    der Planung: Ein Saal, der mehr zieht als der Kessel liefert, braucht
-    die angegebene Zeit einschliesslich des leer werdenden Puffers.
+    Damit wird aus einer angenommenen Vorheizzeit ein Startwert fuer b, der
+    zur Planung passt: Ein Saal, der mehr zieht als der Kessel liefert,
+    braucht die Zeit einschliesslich des leer werdenden Puffers.
     """
     plant = plant or PlantParams()
     return _b_for(
@@ -279,4 +320,5 @@ def b_for_minutes(
         round(min(d, minutes / 60 / 2), 2),
         tuple(round(v * 20) / 20 for v in curve) if curve else None,  # grob, damit der Cache greift
         round(tau, 2),
+        round(gamma, 2),
     )

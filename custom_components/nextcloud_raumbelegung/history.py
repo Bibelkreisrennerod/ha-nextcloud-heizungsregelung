@@ -118,7 +118,7 @@ def replay(
                 opening = valve(target, temp, learner.curve(name))
             forced = any((c.at(moment) or 0.0) > 0.5 for c in boosts)
             samples[name] = RoomSample(moment, temp, opening, target, measured=measured, forced=forced)
-            demand += learner.room_params(name, prior_minutes.get(name, 120.0)).w * (opening or 0.0)
+            demand += learner.room_params(name, prior_minutes.get(name, 120.0)).demand(opening or 0.0)
         gauge.e = min(gauge.e, plant.e_buf)
         _, share = plant_step(demand, plant, gauge, hours)
         if samples:

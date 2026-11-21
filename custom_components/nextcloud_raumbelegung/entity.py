@@ -42,6 +42,17 @@ def room_device_info(entry: ConfigEntry, room: str | None) -> DeviceInfo:
     )
 
 
+def boiler_device_info(entry: ConfigEntry) -> DeviceInfo:
+    """Eigenes Geraet fuer den Kessel (Werte aus StokerCloud und gelernte Kesselwerte)."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, f"{entry.entry_id}_boiler")},
+        name="Kessel",
+        manufacturer="NBE",
+        model="Pelletkessel (StokerCloud)",
+        via_device=(DOMAIN, f"{entry.entry_id}_global"),
+    )
+
+
 def add_room_entities(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,

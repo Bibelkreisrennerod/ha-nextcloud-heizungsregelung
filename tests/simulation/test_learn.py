@@ -15,7 +15,7 @@ def run(hours, setfn, cal=False):
         if w.t.minute%5==0:
             frac=g.update(w.valves,PRIOR)
             samples={r:L.RoomSample(w.t,w.reading(r),round(w.valves[r]*100)/100,w.set[r]) for r in ROOMS}
-            lr.add_sample(w.t,samples,round(w.outside(w.t),1),frac,PRIOR,lr.plant_params(P.PlantParams()),None,cal,(round(getattr(w,'flow',70.0)*2)/2 if USE_FLOW else None),g.share)
+            lr.add_sample(w.t,samples,round(w.outside(w.t),1),frac,PRIOR,lr.plant_params(P.PlantParams()),None,cal,(round(getattr(w,'flow',70.0)*2)/2 if USE_FLOW else None),g.share,w.boiler)
 def report(title):
     print("==",title)
     pp=lr.plant_params(P.PlantParams())
@@ -29,7 +29,7 @@ def report(title):
 import time as _time
 def do_fit(title):
     t0=_time.time()
-    data=lr.prepare_fit(w.t,P.PlantParams(),PRIOR)
+    data=lr.prepare_fit(w.t,P.PlantParams(),PRIOR,GROUPS)
     state=lr.run_fit(data,w.t,P.PlantParams(),round(w.outside(w.t),1))
     dt=_time.time()-t0
     if state is None: print("== Anpassung",title,"nicht moeglich"); return
@@ -42,9 +42,11 @@ def do_fit(title):
             val=v[f"{r}|{k}"]*scale; tru=getattr(t,k)*scale; sd=sg[f"{r}|{k}"]
             if k=="d": return f"d {val*60:.0f}/{tru*60:.0f}min ±{sd*60:.0f}"
             if k=="tau": return f"tau {val*60:.0f}/{tru*60:.0f}min ±{sd*100:.0f}%"
+            if k in ("gamma","k"): return f"{k} {val:.2f}/{tru:.2f} ±{sd:.2f}"
             return f"{k} {val:.3g}/{tru:.3g} ±{sd*100:.0f}%"
-        print(f"  {r[:18]:18} "+"  ".join(f(k) for k in ("a","b","d","tau","w"))+f"  Dauer ±{state['duration_sigma'][r]*100:.0f}%  Sicherheit {lr.safety(r):.2f}")
-    print(f"  Puffer {v['|e_buf']:.2f}/{TPLANT.e_buf} ±{sg['|e_buf']*100:.0f}%")
+        keys=("a","b","d","tau","w","gamma")+(("k",) if f"{r}|k" in v else ())
+        print(f"  {r[:18]:18} "+"  ".join(f(k) for k in keys)+f"  Dauer ±{state['duration_sigma'][r]*100:.0f}%  Sicherheit {lr.safety(r):.2f}")
+    print(f"  Puffer {v['|e_buf']:.2f}/{TPLANT.e_buf} ±{sg['|e_buf']*100:.0f}%  Grenzen {state.get('limits')}  Tueren {state.get('doors')}")
     for e in state["experiments"][:4]:
         print(f"  Testlauf {e['label']:28} Gewinn {e['gain']:5.2f}  Dauer {e['hours']} h  verbessert {[(x['raum'][:8],x['groesse'],x['unsicherheit_minus_prozent']) for x in e['improves']]}")
 # Nacht: alle frei auskuehlen (Sollwert 5) 

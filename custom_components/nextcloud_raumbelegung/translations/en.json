@@ -59,9 +59,6 @@
       }
     },
     "number": {
-      "preheat": {
-        "name": "Initial preheat time"
-      },
       "comfort": {
         "name": "Comfort temperature"
       },
@@ -97,19 +94,19 @@
         "name": "Status"
       },
       "global_boiler_flow": {
-        "name": "Boiler temperature"
+        "name": "Temperature"
       },
       "global_boiler_dhw": {
-        "name": "Boiler hot water"
+        "name": "Hot water"
       },
       "global_boiler_power": {
-        "name": "Boiler power"
+        "name": "Power"
       },
       "global_boiler_updated": {
-        "name": "Boiler last report"
+        "name": "Last report"
       },
       "global_boiler_state": {
-        "name": "Boiler state"
+        "name": "State"
       },
       "warm_at": {
         "name": "Warm at (forecast)"
@@ -136,10 +133,10 @@
         "name": "Buffer capacity"
       },
       "global_boiler_rated": {
-        "name": "Boiler rated power"
+        "name": "Rated power"
       },
       "global_boiler_startup": {
-        "name": "Boiler start-up time"
+        "name": "Start-up time"
       },
       "global_calibration": {
         "name": "Calibration"
@@ -169,11 +166,13 @@
           "outside_sensor": "Outside temperature (instead of weather)",
           "duty_cycle_sensor": "Access point duty cycle",
           "stokercloud_name": "StokerCloud name (read only)",
-          "target_rules": "Target temperature per event (rules)"
+          "target_rules": "Target temperature per event (rules)",
+          "room_groups": "Rooms connected by doors"
         },
         "data_description": {
           "stokercloud_name": "Name from the public view address. No password needed.",
-          "target_rules": "One rule per line: \"keyword @ room = value\". The keyword is searched in the title and tags, case-insensitive. \"@ room\" is optional (several separated by commas). A value with a sign or K is relative to the comfort temperature, otherwise absolute (allowed 15–25 °C or at most 5 K), e.g. \"service @ Hall = -1.5 K\" or \"youth = 20\". The first matching rule wins. A temperature tag in the event (\"Temperatur 20\" or \"Temperatur Saal 20 °C\") overrides every rule."
+          "target_rules": "One rule per line: \"keyword @ room = value\". The keyword is searched in the title and tags, case-insensitive. \"@ room\" is optional (several separated by commas). A value with a sign or K is relative to the comfort temperature, otherwise absolute (allowed 15–25 °C or at most 5 K), e.g. \"service @ Hall = -1.5 K\" or \"youth = 20\". The first matching rule wins. A temperature tag in the event (\"Temperatur 20\" or \"Temperatur Saal 20 °C\") overrides every rule.",
+          "room_groups": "One group per line, rooms separated by commas, e.g. \"Hall, Kitchen\". Within a group the integration learns the heat exchange and estimates when the doors were open. Rooms without a group are treated as separated."
         }
       }
     },

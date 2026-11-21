@@ -11,6 +11,12 @@ CONF_WEATHER = "weather_entity"
 CONF_DUTY_CYCLE_SENSOR = "duty_cycle_sensor"
 CONF_STOKERCLOUD = "stokercloud_name"
 CONF_TARGET_RULES = "target_rules"  # Zieltemperatur je Termin, eine Regel je Zeile
+CONF_ROOM_GROUPS = "room_groups"  # Raeume, die durch Tueren verbunden sind, eine Gruppe je Zeile
+# Gemeinde Rennerod (Angabe vom 21.11.2026); Namen, die es nicht gibt, werden uebergangen
+DEFAULT_ROOM_GROUPS = (
+    "Saal, Küche\n"
+    "Nebenraum (groß), Nebenraum (klein), Ehemaliger Sonntagsschulraum, Vorraum Küche 2, Küche 2"
+)
 
 DEFAULT_WEATHER = "weather.home"
 
@@ -25,14 +31,17 @@ DAYS_AHEAD = 7
 # Einstellungen: Schluessel -> Standardwert. Raumwerte gelten je Raum,
 # globale Werte fuer die ganze Anlage.
 ROOM_DEFAULTS: dict[str, float] = {
-    "preheat": 120.0,  # Startwert Vorheizzeit (min) fuer 14 -> 21 Grad bei 0 Grad aussen, allein
     "comfort": 21.0,  # Komforttemperatur (Grad)
     "priority": 5.0,  # Vorrang, 1 = hoechster
 }
 GLOBAL_DEFAULTS: dict[str, float] = {
     "setback": 14.0,  # Absenktemperatur (Grad)
 }
-REMOVED_SETTINGS = ("weight", "budget", "flow_threshold")  # bis 0.2.x, Entitaeten werden entfernt
+# bis 0.2.x bzw. 0.5.x (Vorheizzeit Startwert), Entitaeten werden entfernt
+REMOVED_SETTINGS = ("weight", "budget", "flow_threshold", "preheat")
+# Vorwissen fuer die Aufheizrate eines Raums ohne Messungen: allein von 14 auf
+# 21 Grad bei 0 Grad aussen in so vielen Minuten (gilt nur bis zur ersten Anpassung)
+PRIOR_PREHEAT_MIN = 120.0
 
 EARLY_MINUTES = 15  # Raum soll so viele Minuten vor Terminbeginn warm sein
 REACHED_TOLERANCE = 0.5  # "warm" = Komforttemperatur minus diese Kelvin

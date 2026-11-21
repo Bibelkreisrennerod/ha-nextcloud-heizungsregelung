@@ -15,7 +15,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .const import CONF_STOKERCLOUD
-from .entity import StatusEntity, add_room_entities
+from .entity import StatusEntity, add_room_entities, boiler_device_info
 from .physics import CURVE_DEV
 
 PROTOCOL_ROWS = 20
@@ -428,7 +428,15 @@ class BufferCapacitySensor(StatusEntity, SensorEntity):
         }
 
 
-class BoilerRatedSensor(StatusEntity, SensorEntity):
+class BoilerEntity(StatusEntity):
+    """Entitaet am Geraet "Kessel"."""
+
+    def __init__(self, entry: ConfigEntry, room: str | None, key: str) -> None:
+        super().__init__(entry, room, key)
+        self._attr_device_info = boiler_device_info(entry)
+
+
+class BoilerRatedSensor(BoilerEntity, SensorEntity):
     """Dauerleistung des Kessels (StokerCloud, sonst Nennwert)."""
 
     _attr_device_class = SensorDeviceClass.POWER
@@ -440,7 +448,7 @@ class BoilerRatedSensor(StatusEntity, SensorEntity):
         return self._status.get("kessel_kw")
 
 
-class BoilerStartupSensor(StatusEntity, SensorEntity):
+class BoilerStartupSensor(BoilerEntity, SensorEntity):
     """Anlaufzeit des Kessels bis zur vollen Leistung."""
 
     _attr_device_class = SensorDeviceClass.DURATION
@@ -472,7 +480,7 @@ class CalibrationSensor(StatusEntity, SensorEntity):
         }
 
 
-class BoilerSensor(StatusEntity, SensorEntity):
+class BoilerSensor(BoilerEntity, SensorEntity):
     """Ein Kesselwert aus StokerCloud (nur aktuelle Werte, sonst unbekannt)."""
 
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -495,7 +503,7 @@ class BoilerSensor(StatusEntity, SensorEntity):
         return getattr(boiler, self._field)
 
 
-class BoilerUpdatedSensor(StatusEntity, SensorEntity):
+class BoilerUpdatedSensor(BoilerEntity, SensorEntity):
     """Zeitpunkt der letzten Meldung des Kessels an StokerCloud."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
@@ -506,7 +514,33 @@ class BoilerUpdatedSensor(StatusEntity, SensorEntity):
         return boiler.updated if boiler else None
 
 
-class BoilerStateSensor(StatusEntity, SensorEntity):
+# Kesselzustaende von StokerCloud ("state_N"), soweit bekannt. NBE veroeffentlicht
+# die Liste nicht; unbekannte Nummern werden aus Betrieb, Leistung und Alarm beschrieben.
+BOILER_STATES: dict[str, str] = {}
+
+
+def boiler_state_text(boiler) -> str:
+    """Lesbarer Kesselzustand aus StokerCloud-Werten."""
+    values = boiler.values
+
+    def flag(key: str) -> str | None:
+        item = values.get(key) or values.get(f"miscdata.{key}") or {}
+        value = item.get("value")
+        return None if value is None else str(value).strip()
+
+    if flag("alarm") not in (None, "0", "0.0", "false", "False"):
+        return "Störung"
+    known = BOILER_STATES.get(boiler.state or "")
+    if known:
+        return known
+    if flag("running") in ("0", "false", "False"):
+        return "aus"
+    if boiler.power_kw is not None:
+        return "heizt" if boiler.power_kw > 0.1 else "in Bereitschaft"
+    return "in Betrieb"
+
+
+class BoilerStateSensor(BoilerEntity, SensorEntity):
     """Kesselstatus; Attribute enthalten alle gelesenen Rohwerte zur Pruefung."""
 
     _attr_icon = "mdi:fire-circle"
@@ -522,14 +556,17 @@ class BoilerStateSensor(StatusEntity, SensorEntity):
         if controller.boiler.stale:
             offline = str(controller.boiler.values.get("notconnected", {}).get("value")) == "1"
             return "Kessel offline" if offline else "keine aktuellen Daten"
-        return controller.boiler.state or "verbunden"
+        return boiler_state_text(controller.boiler)
 
     def _extra(self) -> dict[str, Any] | None:
         controller = self._controller
         boiler = controller.boiler if controller else None
         return {
+            "code": boiler.state if boiler else None,
+            "leistung_kw": boiler.power_kw if boiler else None,
+            "nennleistung_kw": boiler.nominal_kw if boiler else None,
             "fehler": controller._boiler_error if controller else None,
-            "vorlauf_gelesen": boiler.flow if boiler else None,
+            "kesseltemperatur": boiler.flow if boiler else None,
             "letzte_uhrzeit": (boiler.values.get("clock") or {}).get("value") if boiler else None,
             "rohwerte": {
                 key: f"{item.get('value')} {item.get('unit') or ''}".strip()
@@ -550,7 +587,7 @@ class ModelFitSensor(StatusEntity, SensorEntity):
     _attr_native_unit_of_measurement = UnitOfTemperature.KELVIN
     _attr_suggested_display_precision = 2
     _attr_icon = "mdi:chart-bell-curve"
-    _unrecorded_attributes = frozenset({"raeume", "pufferreserve_unsicherheit_prozent"})
+    _unrecorded_attributes = frozenset({"raeume", "pufferreserve_unsicherheit_prozent", "grenzen", "tueren"})
 
     @property
     def native_value(self) -> float | None:
@@ -567,6 +604,8 @@ class ModelFitSensor(StatusEntity, SensorEntity):
             "neue_messpunkte": self._status.get("rows_pending"),
             "pufferreserve_unsicherheit_prozent": fit.get("e_buf_spread"),
             "raeume": fit.get("rooms"),
+            "grenzen": fit.get("grenzen"),
+            "tueren": fit.get("tueren"),
         }
 
 
