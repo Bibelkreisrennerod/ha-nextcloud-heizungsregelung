@@ -84,6 +84,9 @@ def _collect(node: Any, out: dict[str, dict[str, Any]], dates: list[datetime], p
                 _collect(child, out, dates, child_key)
             elif isinstance(child, str):
                 _scan_date(child, dates)
+                # Zahlen als Text (z. B. "outputpct": "76") ebenfalls einsammeln
+                if child_key not in ("id", "name", "unit", "value") and re.fullmatch(r"-?\d+(?:[.,]\d+)?", child):
+                    out.setdefault(child_key if not path else f"{path}.{child_key}", {"value": child, "unit": None, "name": None})
             elif child_key not in ("id", "name", "unit", "value") and isinstance(child, (int, float)):
                 out.setdefault(child_key if not path else f"{path}.{child_key}", {"value": child, "unit": None, "name": None})
     elif isinstance(node, list):
@@ -132,25 +135,30 @@ def parse(payload: Any, now: datetime, tz) -> StokerData:
     data.flow = _pick(values, FLOW_KEYS, "°c|degree|lng_unit_c")
     data.dhw = _pick(values, DHW_KEYS, "°c|degree|lng_unit_c")
     data.return_temp = _pick(values, RETURN_KEYS, "°c|degree|lng_unit_c")
-    data.power = _pick(values, POWER_KEYS, "%|percent")
-    # Nennleistung: Kennung "8" in kW (StokerCloud-Startseite)
+    # Nennleistung: Kennung "8" in kW (Pelletschnecke, auger.kw_max)
     nominal = values.get("8") or {}
     if "kw" in str(nominal.get("unit") or "").lower() and (number := _number(nominal.get("value"))):
         if 3 <= number <= 500:
             data.nominal_kw = number
-    # "miscdata.output" ist bei NBE die Leistung in kW (gleicher Wert wie Kennung "5", Einheit kW),
-    # nicht in Prozent
-    if data.power is not None:
-        kw_values = [
-            _number(item.get("value"))
-            for ident, item in values.items()
-            if "kw" in str(item.get("unit") or "").lower() and ident != "8"
-        ]
-        if any(v is not None and abs(v - data.power) < 0.05 for v in kw_values):
-            data.power_kw = data.power
-            data.power = (
-                round(data.power_kw / data.nominal_kw * 100.0, 1) if data.nominal_kw else None
-            )
+    # Leistung: "miscdata.output" ist bei NBE kW (gleicher Wert wie Kennung "5",
+    # Einheit kW), "miscdata.outputpct" der Anteil der Nennleistung in Prozent
+    output = _number((values.get("miscdata.output") or {}).get("value"))
+    percent = _number((values.get("miscdata.outputpct") or {}).get("value"))
+    kw_values = [
+        _number(item.get("value"))
+        for ident, item in values.items()
+        if "kw" in str(item.get("unit") or "").lower() and ident != "8"
+    ]
+    if output is not None and any(v is not None and abs(v - output) < 0.05 for v in kw_values):
+        data.power_kw = output
+    if percent is not None and 0 <= percent <= 150:
+        data.power = percent
+    elif data.power_kw is not None:
+        data.power = round(data.power_kw / data.nominal_kw * 100.0, 1) if data.nominal_kw else None
+    else:
+        data.power = _pick(values, POWER_KEYS, "%|percent")
+    if data.power_kw is None and data.power is not None and data.nominal_kw:
+        data.power_kw = round(data.power / 100.0 * data.nominal_kw, 2)
     for ident in ("boilerstate", "state", "status"):
         for key, item in values.items():
             if key.lower().endswith(ident) and isinstance(item.get("value"), str):

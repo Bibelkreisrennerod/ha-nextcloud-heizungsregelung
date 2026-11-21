@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.6.0. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.6.1. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -100,7 +100,11 @@ Nextcloud direkt ab.
     verwendet; frühere so gespeicherte Werte werden verworfen. Die
     Kesselleistung (kW) geht als gemessene Energiezufuhr in den Puffer ein,
     in der Anpassung und in der Pufferreserve. Ein echter Vorlauf-Sensor kann
-    weiterhin in den Optionen gewählt werden.
+    weiterhin in den Optionen gewählt werden. Geprüft am 21.11.2026: Die
+    StokerCloud der Anlage liefert neben Kesseltemperatur, Warmwasser und
+    Leistung (kW und Prozent, `outputpct`) nur Wetter, Pelletverbrauch,
+    Restsauerstoff und Einstellungen; Puffer-, Vorlauf- oder Rücklauffühler
+    sind am Kessel nicht angeschlossen (Wetterführung aus, Mindest-Rücklauf 0).
   - **„Vorheizzeit Startwert“ entfällt:** Bis zur ersten Anpassung gilt
     intern 120 Minuten (14 → 21 °C allein bei 0 °C außen).
 - **Empfohlener Testlauf:** Nach jeder Anpassung rechnet die Integration
