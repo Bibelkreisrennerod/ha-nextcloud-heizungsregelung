@@ -6,10 +6,10 @@
   ],
   "codeowners": [],
   "config_flow": true,
-  "documentation": "https://github.com/Bibelkreisrennerod/ha-nextcloud-raumbelegung",
+  "documentation": "https://github.com/Bibelkreisrennerod/ha-nextcloud-heizungsregelung",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/Bibelkreisrennerod/ha-nextcloud-raumbelegung/issues",
+  "issue_tracker": "https://github.com/Bibelkreisrennerod/ha-nextcloud-heizungsregelung/issues",
   "requirements": [],
   "version": "0.6.1"
 }
