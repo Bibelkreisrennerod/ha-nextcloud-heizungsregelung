@@ -175,6 +175,11 @@ class RoomTemperatureSensor(StatusEntity, SensorEntity):
     def native_value(self) -> float | None:
         return self._status.get("temp")
 
+    def _extra(self) -> dict[str, Any] | None:
+        # am Thermostat eingestellter Offset (K); "nicht lesbar", wenn er sich nicht lesen laesst
+        offset = self._status.get("offset")
+        return {"thermostat_offset": "nicht lesbar" if offset is None else round(offset, 1)}
+
 
 class ValveSensor(StatusEntity, SensorEntity):
     """Mittlere Ventilstellung der Heizkoerper im Raum."""

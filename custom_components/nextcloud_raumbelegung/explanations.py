@@ -93,8 +93,8 @@ EXPLANATIONS: dict[str, str] = {
         "Raumtemperaturen 30, 60 und 120 min voraus nachgerechnet hat. Unter 0,2 K gut, über 0,5 K stimmt "
         "das Modell noch nicht. Die Attribute zeigen je Raum die Unsicherheit der gelernten Werte, "
         "gamma (Ventilstellung → Wärme) und den Wärmeaustausch mit den Nachbarräumen; „tueren“: wie "
-        "oft die Türen einer Raumgruppe laut Schätzung offen waren; „grenzen“: Werte, die an einer "
-        "Plausibilitätsgrenze gebremst wurden."
+        "oft die Türen einer Raumgruppe laut Schätzung offen waren; „grenzen“: Werte am Rand des "
+        "Rechenbereichs (dann passt das Modell für diesen Raum nicht)."
     ),
     "global_test_run": (
         "Der Kalibrierlauf, der die Unsicherheit der gelernten Werte am stärksten verkleinern würde, "

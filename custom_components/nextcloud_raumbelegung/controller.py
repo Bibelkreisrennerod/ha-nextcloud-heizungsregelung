@@ -85,6 +85,7 @@ from .const import (
     SOURCE_ALERT_AFTER,
 )
 from .history import ReplayResult, RoomSeries, Series, replay
+from .homematic import climate_offsets
 from .learning import Learner, RoomSample, flow_share
 from .physics import PlantParams, PlantState, RoomParams, plant_step, solo_minutes, valve
 from .planning import (
@@ -586,9 +587,14 @@ class HeatingController:
                 result.append(entity_id)
         return result
 
-    def _room_reading(self, climates: list[str]) -> tuple[float | None, float | None]:
-        """(Raumtemperatur, aktueller Sollwert) gemittelt ueber die Thermostat-Gruppen."""
-        temps, targets = [], []
+    def _room_reading(self, climates: list[str]) -> tuple[float | None, float | None, float | None]:
+        """(Raumtemperatur, aktueller Sollwert, Offset) gemittelt ueber die Thermostat-Gruppen.
+
+        Offset: am Thermostat eingestellte Temperaturverschiebung, None wenn er
+        sich nicht fuer alle Gruppen lesen laesst, die eine Temperatur liefern.
+        """
+        temps, targets, offsets = [], [], []
+        known = climate_offsets(self.hass, climates) if climates else {}
         for entity_id in climates:
             state = self.hass.states.get(entity_id)
             if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
@@ -597,11 +603,13 @@ class HeatingController:
             target = state.attributes.get("temperature")
             if isinstance(current, (int, float)):
                 temps.append(float(current))
+                offsets.append(known.get(entity_id))
             if isinstance(target, (int, float)):
                 targets.append(float(target))
         temp = sum(temps) / len(temps) if temps else None
         target = sum(targets) / len(targets) if targets else None
-        return temp, target
+        offset = sum(offsets) / len(offsets) if offsets and None not in offsets else None
+        return temp, target, offset
 
     def _valve_reading(
         self, room: str, sensors: list[str], target: float | None, temp: float | None
@@ -795,7 +803,7 @@ class HeatingController:
         for room in data.rooms:
             self.rooms.setdefault(room, RoomState())
             climates, area_id = self._climates(room)
-            temp, target_now = self._room_reading(climates)
+            temp, target_now, offset = self._room_reading(climates)
             valve_sensors = self._valve_sensors(area_id)
             events = sorted(
                 (e for e in data.events if room in e.rooms and not e.all_day and e.end > now),
@@ -815,6 +823,7 @@ class HeatingController:
                 "climates": climates,
                 "area": area_id,
                 "temp": temp,
+                "offset": offset,
                 "target_now": target_now,
                 "valve": self._valve_reading(room, valve_sensors, target_now, temp),
                 "valve_count": len(valve_sensors),
@@ -888,6 +897,7 @@ class HeatingController:
                 info["target_now"],
                 measured=info["valve_count"] > 0,
                 forced=info["boost"],
+                offset=info.get("offset"),
             )
             prior[room] = PRIOR_PREHEAT_MIN
             demand += self.room_params(room).demand(info["valve"] or 0.0)
@@ -1555,6 +1565,7 @@ class HeatingController:
             "mode": info.get("mode"),
             "demand": desired is not None and desired >= info["comfort"] - SETPOINT_TOLERANCE,
             "temp": info["temp"],
+            "offset": info.get("offset"),
             "desired": desired,
             "valve": None if info["valve"] is None else round(info["valve"] * 100),
             "valve_count": info["valve_count"],

@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.6.1. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.6.2. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -90,10 +90,19 @@ Nextcloud direkt ab.
     Messungen ihn sicher belegen (untere 95-%-Grenze). Voreingestellt für die
     Gemeinde: „Saal, Küche“ und „Nebenraum (groß), Nebenraum (klein),
     Ehemaliger Sonntagsschulraum, Vorraum Küche 2, Küche 2“.
-  - **Plausibilitätsgrenzen:** Werte, die physikalisch nicht passen (bei der
-    Höchstöffnung schneller als 10 K/h, mehr als das 1,5-Fache der
-    Kesselleistung, bei 20 K Unterschied nach außen nicht zu halten), bremst
-    ein Strafterm; sie stehen im Attribut `grenzen` der „Modellanpassung“.
+  - **Keine Plausibilitätsgrenzen mehr (0.6.2):** Die Werte dürfen
+    beschreiben, was die Thermostate messen, auch wenn der Fühler am
+    Heizkörper sitzt und der Raum dadurch schneller warm „aussieht“. Es
+    bleiben nur weite Rechengrenzen; ein Wert dort steht im Attribut
+    `grenzen` der „Modellanpassung“.
+  - **Temperatur-Offset der Thermostate (0.6.2):** Der in der Homematic-App
+    eingestellte Offset (−3,5 bis +3,5 K) wird aus der Integration
+    Homematic IP Cloud gelesen und mit jedem Messpunkt gespeichert. Wird er
+    verstellt, rechnet die Anpassung die früheren Messpunkte auf den neuen
+    Offset um, statt einen Temperatursprung zu lernen; das gilt auch für
+    0,5-K-Schritte. Der gelesene Wert steht im Attribut `thermostat_offset`
+    der Raumtemperatur („nicht lesbar“, wenn die Integration ihn nicht
+    hergibt; dann arbeitet die Steuerung wie bisher).
   - **Kesseldaten richtig gedeutet:** Die Kesseltemperatur aus StokerCloud
     ist kein Vorlauf (Puffer und Mischer liegen dazwischen; die Heizkreise
     laufen nicht über die Kesselsteuerung) und wird nicht mehr als Vorlauf
@@ -174,7 +183,9 @@ Nextcloud direkt ab.
    Nextcloud-Ressource** zuordnen (z. B. „Saal“).
 3. Das bisherige Heizprofil kann bleiben: Es gilt immer dann, wenn die
    Automatik aus ist.
-4. Temperatur-Offsets direkt in der Homematic-App einstellen.
+4. Temperatur-Offsets direkt in der Homematic-App einstellen. Die
+   Steuerung liest sie mit (siehe oben); Messpunkte vor dem ersten
+   Auslesen (vor 0.6.2) kennen den Offset nicht und bleiben, wie sie sind.
 
 ## Installation
 

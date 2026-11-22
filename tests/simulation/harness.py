@@ -45,6 +45,8 @@ class World:
     def __init__(s,start):
         s.t=start; s.start=start; s.boiler=0.0; s.temps={r:14.0 for r in ROOMS}; s.set={r:14.0 for r in ROOMS}; s.state=P.PlantState(TPLANT.e_buf); s.valves={r:0.0 for r in ROOMS}
         s.integral={r:0.0 for r in ROOMS}
+        s.offset={r:0.0 for r in ROOMS}  # Temperatur-Offset am Thermostat: verschiebt Anzeige und Regelung
+        s.bias={r:0.0 for r in ROOMS}  # Fuehler misst so viel zu warm (z. B. nah am Heizkoerper); der Offset gleicht das aus
         s.delays={r:P.Delay(TRUE[r].d,1/60,lag=TRUE[r].tau) for r in ROOMS}
     def outside(s,t):  # Tagesgang
         h=(t.hour+t.minute/60); return 3+4*math.sin((h-9)/24*2*math.pi)
@@ -55,7 +57,7 @@ class World:
     def step(s,minutes=1):
         dt=minutes/60
         for r in ROOMS:
-            target,s.integral[r]=pi_valve(r,s.set[r],s.temps[r],s.integral[r],dt)
+            target,s.integral[r]=pi_valve(r,s.set[r],s.temps[r]+s.bias[r]+s.offset[r],s.integral[r],dt)
             s.valves[r]+=(target-s.valves[r])*min(1.0,dt/VALVE_LAG)
         D=sum(TRUE[r].demand(s.valves[r]) for r in ROOMS)
         was_on,on_for=s.state.boiler_on,s.state.on_for
@@ -70,8 +72,8 @@ class World:
             ex=TRUE[r].k*s.door(g)*(sum(others)/len(others)-before[r]) if others else 0.0
             s.temps[r]=P.room_step(before[r],TRUE[r],s.delays[r].push(TRUE[r].heat(s.valves[r])*share),out,dt,ex)
         s.t+=timedelta(minutes=minutes)
-    def reading(s,r):  # 0,1 K Aufloesung wie Homematic
-        return round(s.temps[r]*10)/10
+    def reading(s,r):  # 0,1 K Aufloesung wie Homematic, mit Offset wie angezeigt
+        return round((s.temps[r]+s.bias[r]+s.offset[r])*10)/10
 class Gauge:
     def __init__(s,learner,plant0): s.l=learner; s.p0=plant0; s.state=None
     def update(s,valves,prior):

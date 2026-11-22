@@ -130,6 +130,7 @@ class RoomSample:
     setpoint: float | None
     measured: bool = True  # Ventilstellung gemessen (nicht aus Soll/Ist geschaetzt)
     forced: bool = False  # Boost: Ventil fest geoeffnet, nicht vom Regler bestimmt
+    offset: float | None = None  # Temperatur-Offset der Thermostate (K), None = unbekannt
 
 
 @dataclass
@@ -226,6 +227,7 @@ class Learner:
         }
         self.plant = PlantStats.from_dict(data.get("plant", {}))
         self._windows: dict[str, deque[RoomSample]] = {}
+        self._offsets: dict[str, float] = {}  # zuletzt gesehener Offset je Raum
         self._outside: deque[tuple[datetime, float | None, float]] = deque(maxlen=COOL_WINDOW + 1)
         self._closed_since: dict[str, datetime | None] = {}
         self._open_since: dict[str, datetime | None] = {}
@@ -458,6 +460,7 @@ class Learner:
             stats.cv = [v * DECAY for v in stats.cv]
             stats.cw = [v * DECAY for v in stats.cw]
             window = self._windows.setdefault(name, deque(maxlen=COOL_WINDOW + 1))
+            self._follow_offset(name, sample)
             window.append(sample)
             self._curve_sample(name, stats, sample, now)
             if sample.valve is not None:
@@ -485,6 +488,30 @@ class Learner:
             now, rooms, gains, buffer_fraction, boiler_kw, plant, prior_minutes, calibration, flow, tops
         )
 
+    def _follow_offset(self, name: str, sample: RoomSample) -> None:
+        """Offset am Thermostat geaendert: Vorgeschichte auf den neuen Offset umrechnen.
+
+        Sonst saehen die Einzelschaetzungen (Auskuehlen, Totzeit, Aufheizen)
+        einen Temperatursprung, den es im Raum nicht gab.
+        """
+        if sample.offset is None:
+            return
+        previous = self._offsets.get(name)
+        self._offsets[name] = sample.offset
+        if previous is None or abs(sample.offset - previous) < 0.05:
+            return
+        delta = sample.offset - previous
+        window = self._windows.get(name)
+        if window:
+            shifted = [replace(s, temp=None if s.temp is None else s.temp + delta) for s in window]
+            window.clear()
+            window.extend(shifted)
+        track = self._track.get(name)
+        if track:
+            shifted_track = [(None if t is None else t + delta, *rest) for t, *rest in track]
+            track.clear()
+            track.extend(shifted_track)
+
     # ------------------------------------------------- gemeinsame Anpassung
 
     def _store_row(
@@ -505,6 +532,7 @@ class Learner:
                     round(s.temp, 2),
                     None if s.valve is None or not s.measured else round(s.valve, 3),
                     None if s.setpoint is None else round(s.setpoint, 1),
+                    None if s.offset is None else round(s.offset, 2),
                 ]
                 for name, s in rooms.items()
                 if s.temp is not None
@@ -567,7 +595,6 @@ class Learner:
             flow_full=self._flow_full,
             flow_room=FLOW_ROOM,
             flow_min_span=FLOW_MIN_SPAN,
-            tops={room: top_opening(self.curve(room)) for room in names},
             groups={room: group for room, group in (groups or {}).items() if room in names},
         )
 

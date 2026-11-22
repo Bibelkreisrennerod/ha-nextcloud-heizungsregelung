@@ -4,17 +4,27 @@ exec(open("harness.py").read())
 random.seed(1)
 import sys
 USE_FLOW='flow' in sys.argv
+# offset: zwei Thermostate messen zu warm (1,5 und 3,5 K); ihre Offsets werden wie am 22.11.2026
+# nachgestellt, zuletzt um je 0,5 K; der Offset wird mitgemeldet.
+# offset_blind: dieselben Verstellungen, der Offset ist aber nicht lesbar
+OFFSET_MODE='offset' if 'offset' in sys.argv else ('blind' if 'offset_blind' in sys.argv else None)
+OFFSET_CHANGES=[(30,"Nebenraum (groß)",-1.5),(36,"Nebenraum (klein)",-3.5),(62,"Nebenraum (groß)",-1.0),(64,"Nebenraum (klein)",-3.0)]
 start=datetime(2026,11,18,0,0,tzinfo=timezone.utc)
 w=World(start); lr=L.Learner(); lr.room_stats("Saal").valves=5
+if OFFSET_MODE: w.bias.update({"Nebenraum (groß)":1.5,"Nebenraum (klein)":3.5})
 for r in ROOMS: lr.room_stats(r)
 g=Gauge(lr,P.PlantParams())
 def run(hours, setfn, cal=False):
     for m in range(int(hours*60)):
         for r in ROOMS: w.set[r]=setfn(r,w.t)
+        if OFFSET_MODE:
+            hours=(w.t-start).total_seconds()/3600
+            for at,room,value in OFFSET_CHANGES:
+                if hours>=at: w.offset[room]=value
         w.step(1)
         if w.t.minute%5==0:
             frac=g.update(w.valves,PRIOR)
-            samples={r:L.RoomSample(w.t,w.reading(r),round(w.valves[r]*100)/100,w.set[r]) for r in ROOMS}
+            samples={r:L.RoomSample(w.t,w.reading(r),round(w.valves[r]*100)/100,w.set[r],offset=(w.offset[r] if OFFSET_MODE=='offset' else None)) for r in ROOMS}
             lr.add_sample(w.t,samples,round(w.outside(w.t),1),frac,PRIOR,lr.plant_params(P.PlantParams()),None,cal,(round(getattr(w,'flow',70.0)*2)/2 if USE_FLOW else None),g.share,w.boiler)
 def report(title):
     print("==",title)
@@ -64,5 +74,6 @@ do_fit("nach Lauf 2 (kleine Raeume zusammen)")
 run(6, lambda r,t: 21.0 if r in ("Saal","Nebenraum (groß)") else 10.0, True)
 run(10, lambda r,t: 14.0)
 do_fit("nach Lauf 3 (Saal und Nebenraum gross)")
-import json; open("learned_flow.json" if USE_FLOW else "learned.json","w").write(json.dumps(lr.to_dict()))
+import json
+if not OFFSET_MODE: open("learned_flow.json" if USE_FLOW else "learned.json","w").write(json.dumps(lr.to_dict()))
 

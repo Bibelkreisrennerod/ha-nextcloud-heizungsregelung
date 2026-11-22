@@ -15,10 +15,12 @@ besten nachrechnet:
   Raeume der Gruppe am besten nachgerechnet werden, Wechsel kosten etwas,
   im Zweifel offen), danach werden die Werte mit diesen Zustaenden neu
   angepasst.
-- Plausibilitaetsgrenzen: Werte, die physikalisch nicht passen (ein Raum
-  heizt bei seiner Hoechstoeffnung schneller als 10 K/h, zieht mehr als das
-  1,5-Fache der Kesselleistung oder liesse sich bei 20 K Unterschied nach
-  aussen nicht halten), werden mit einem Strafterm zurueckgehalten.
+- Temperatur-Offset der Thermostate: Homematic IP verschiebt die angezeigte
+  Temperatur um den eingestellten Offset. Aendert er sich, springt die
+  Messung, ohne dass sich im Raum etwas aendert. Die Messpunkte werden
+  deshalb auf den aktuellen Offset umgerechnet (gemessene Temperatur minus
+  Offset damals plus Offset jetzt); Planung und Thermostat arbeiten in
+  derselben Skala.
 - Nachgerechnet wird aus jedem Messpunkt (alle 30 min) 30, 60 und 120 min
   voraus, mit den gemessenen Ventilstellungen. Das ist genau die Vorhersage,
   die die Planung braucht.
@@ -66,22 +68,18 @@ ROOM_KEYS = ("a", "b", "d", "tau", "w", "gamma")  # dazu "k" fuer Raeume mit Nac
 LOCAL_KEYS = ("a", "b", "d", "tau", "k")  # wirken nur auf den eigenen Raum
 DURATION_KEYS = ("a", "b", "d", "tau", "gamma")  # bestimmen die Aufheizdauer allein
 BOUNDS = {
-    "a": (math.log(0.01), math.log(0.4)),  # Auskuehl-Zeitkonstante 2,5 bis 100 h
-    "b": (math.log(0.3), math.log(25.0)),  # K/h je 100 % Ventil
-    "d": (0.0, 1.0),
+    # nur Schutz vor Rechenfehlern, keine Plausibilitaet: die Werte duerfen
+    # beschreiben, was die Thermostate messen (Fuehler am Heizkoerper)
+    "a": (math.log(0.005), math.log(0.5)),  # Auskuehl-Zeitkonstante 2 bis 200 h
+    "b": (math.log(0.1), math.log(60.0)),  # K/h je 100 % Ventil
+    "d": (0.0, 1.5),
     "tau": (math.log(0.02), math.log(2.0)),
-    "w": (math.log(0.02), math.log(4.0)),
-    "gamma": (0.4, 1.3),
+    "w": (math.log(0.02), math.log(10.0)),
+    "gamma": (0.3, 1.5),
     "k": (0.0, 2.0),
     "e_buf": (math.log(0.05), math.log(5.0)),
 }
 STEPS = {"a": 0.02, "b": 0.02, "d": 0.03, "tau": 0.05, "w": 0.03, "gamma": 0.03, "k": 0.03, "e_buf": 0.03}
-# Plausibilitaet (bei der Hoechstoeffnung des Raums)
-B_TOP_MAX = 10.0  # K/h Aufheizrate
-W_TOP_MAX = 1.5  # Vielfache der Kessel-Dauerleistung
-HOLD_DELTA = 20.0  # K Unterschied nach aussen, bei dem der Raum haltbar sein soll
-HOLD_MAX = 1.2  # benoetigter Waermeanteil dabei hoechstens (etwas Spielraum ueber "ganz offen")
-PLAUS_SIGMA = 0.1  # Strafe: je 10 % Ueberschreitung so viel wie 0,2 K Vorhersagefehler
 # Tuerzustand
 DOOR_ROUNDS = 2
 DOOR_SWITCH = 4.0  # Kosten eines Wechsels (in quadrierten, normierten Residuen)
@@ -95,7 +93,7 @@ class FitInput:
     """Alles, was eine Anpassung braucht (Momentaufnahme, unabhaengig vom Learner)."""
 
     # {"t": Sekunden, "o": aussen, "f": Vorlauf, "p": Kesselleistung (Anteil der Nennleistung),
-    #  "r": {Raum: [T, Ventil, Soll]}}
+    #  "r": {Raum: [T, Ventil, Soll, Offset]}}  (Offset fehlt in aelteren Messpunkten)
     rows: list[dict[str, Any]]
     prior_mean: dict[Name, float]  # natuerliche Einheiten
     prior_info: dict[Name, dict[Name, float]] | None  # Information im Transformationsraum, None = erste Anpassung
@@ -103,7 +101,6 @@ class FitInput:
     flow_full: float | None = None
     flow_room: float = 20.0
     flow_min_span: float = 15.0
-    tops: dict[str, float] = field(default_factory=dict)  # Hoechstoeffnung je Raum (Kennlinie)
     groups: dict[str, str] = field(default_factory=dict)  # Raum -> Gruppe (durch Tueren verbunden)
 
 
@@ -137,6 +134,31 @@ def _to_natural(key: str, value: float) -> float:
 def _clamp(key: str, value: float) -> float:
     low, high = BOUNDS[key]
     return min(max(value, low), high)
+
+
+def _offset(entry: list | None) -> float | None:
+    """Offset eines Messpunkts (viertes Feld), None wenn unbekannt."""
+    if not entry or len(entry) < 4 or entry[3] is None:
+        return None
+    return float(entry[3])
+
+
+def _on_current_offset(temps: list[float | None], offsets: list[float | None]) -> list[float | None]:
+    """Temperaturen auf den zuletzt bekannten Offset umrechnen.
+
+    Unbekannter Offset: der zuletzt davor bekannte, vor dem ersten bekannten der
+    erste (aeltere Messpunkte bleiben dann, wie sie sind).
+    """
+    known = [o for o in offsets if o is not None]
+    if not known:
+        return temps
+    current, last = known[-1], known[0]
+    result = []
+    for temp, offset in zip(temps, offsets):
+        if offset is not None:
+            last = offset
+        result.append(None if temp is None else temp - last + current)
+    return result
 
 
 def _solve(matrix: list[list[float]], rhs: list[float]) -> list[float] | None:
@@ -207,7 +229,10 @@ class _Model:
         self.boiler = [r.get("p") for r in self.rows]  # gemessene Kesselleistung oder None
         self.series: dict[str, tuple[list, list]] = {}
         for room in self.rooms:
-            temps = [(r["r"].get(room) or [None])[0] for r in self.rows]
+            temps = _on_current_offset(
+                [(r["r"].get(room) or [None])[0] for r in self.rows],
+                [_offset(r["r"].get(room)) for r in self.rows],
+            )
             valves = [
                 (r["r"][room][1] if room in r["r"] and len(r["r"][room]) > 1 else None) for r in self.rows
             ]
@@ -318,18 +343,6 @@ class _Model:
                     out.append((s, value) if with_start else value)
         return out
 
-    def plausibility(self, room: str, params: RoomParams) -> list[float]:
-        """Strafterme fuer physikalisch unplausible Werte (0, solange alles passt)."""
-        top = self.data.tops.get(room, 1.0)
-        at_top = params.heat(top)
-        hold = params.a * HOLD_DELTA / max(params.b, 1e-6)
-        terms = (
-            params.b * at_top / B_TOP_MAX,
-            params.w * at_top / W_TOP_MAX,
-            hold / HOLD_MAX,
-        )
-        return [max(0.0, math.log(max(x, 1e-9))) / PLAUS_SIGMA for x in terms]
-
     def flow_residuals(self, shares: list[float]) -> list[float]:
         if self.measured_share is None:
             return []
@@ -339,8 +352,6 @@ class _Model:
         rooms, e_buf = self.params(vector)
         shares = self.shares(rooms, e_buf)
         result = {room: self.room_residuals(room, rooms[room], shares) for room in self.rooms}
-        for room in self.rooms:
-            result[f"_p|{room}"] = self.plausibility(room, rooms[room])
         result["_flow"] = self.flow_residuals(shares)
         return result
 
@@ -360,13 +371,7 @@ class _Model:
             if room is not None and key in LOCAL_KEYS:
                 params = replace(rooms[room], **{key: _to_natural(key, shifted[index])})
                 new = self.room_residuals(room, params, shares)
-                plaus = self.plausibility(room, params)
-                columns.append(
-                    {
-                        room: [(x - y) / h for x, y in zip(new, base[room])],
-                        f"_p|{room}": [(x - y) / h for x, y in zip(plaus, base[f"_p|{room}"])],
-                    }
-                )
+                columns.append({room: [(x - y) / h for x, y in zip(new, base[room])]})
             else:
                 changed = self.residuals(shifted)
                 columns.append(
@@ -560,17 +565,12 @@ def fit(data: FitInput) -> FitResult | None:
         values = residual.get(room) or []
         if values:
             rms_rooms[room] = math.sqrt(sum(x * x for x in values) / len(values)) * SIGMA_ASSUMED
-    # Werte am Rand oder mit Strafterm melden
+    # Werte am Rand des Rechenbereichs melden (dann passt das Modell nicht)
     limits = []
     for (room, key), value in zip(names, vector):
         low, high = BOUNDS[key]
         if value <= low + 1e-6 or value >= high - 1e-6:
             limits.append(f"{room or 'Anlage'}: {key} an der Grenze")
-    labels = ("Aufheizrate", "Leistungsbedarf", "Halten bei 20 K")
-    for room in rooms:
-        for label, value in zip(labels, residual.get(f"_p|{room}", [])):
-            if value > 0.5:
-                limits.append(f"{room}: {label} gebremst")
     doors = {}
     for group in groups:
         series = model.doors[group]
