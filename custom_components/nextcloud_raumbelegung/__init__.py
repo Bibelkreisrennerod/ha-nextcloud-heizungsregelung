@@ -13,6 +13,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, REMOVED_SETTINGS
 from .controller import HeatingController
@@ -24,6 +25,23 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 SERVICE_CALIBRATE = "kalibrierlauf"
 SERVICE_CALIBRATE_STOP = "kalibrierlauf_abbrechen"
 SERVICE_LEARN_HISTORY = "aus_historie_lernen"
+SERVICE_OFFSET_LOG = "offset_nachtragen"
+OFFSET_LOG_SCHEMA = vol.Schema(
+    {
+        vol.Required("raum"): cv.string,
+        vol.Required("verlauf"): vol.All(
+            cv.ensure_list,
+            [
+                vol.Schema(
+                    {
+                        vol.Required("ab"): cv.datetime,
+                        vol.Required("offset"): vol.All(vol.Coerce(float), vol.Range(min=-3.5, max=3.5)),
+                    }
+                )
+            ],
+        ),
+    }
+)
 CALIBRATE_SCHEMA = vol.Schema(
     {
         vol.Required("raeume"): vol.All(cv.ensure_list, [cv.string]),
@@ -61,6 +79,16 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     hass.services.async_register(DOMAIN, SERVICE_CALIBRATE_STOP, calibrate_stop)
     hass.services.async_register(DOMAIN, SERVICE_LEARN_HISTORY, learn_history)
+
+    async def offset_log(call: ServiceCall) -> None:
+        local = dt_util.get_default_time_zone()
+        entries = [
+            (item["ab"] if item["ab"].tzinfo else item["ab"].replace(tzinfo=local), item["offset"])
+            for item in call.data["verlauf"]
+        ]
+        _controller(hass).set_offset_log(call.data["raum"], entries)
+
+    hass.services.async_register(DOMAIN, SERVICE_OFFSET_LOG, offset_log, schema=OFFSET_LOG_SCHEMA)
     return True
 
 

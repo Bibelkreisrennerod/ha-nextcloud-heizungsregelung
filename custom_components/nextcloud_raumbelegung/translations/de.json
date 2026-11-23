@@ -217,6 +217,20 @@
     "aus_historie_lernen": {
       "name": "Aus der Historie lernen",
       "description": "Verwirft die gelernten Raum- und Anlagenwerte und lernt sie neu aus der gespeicherten Historie (Raumtemperaturen, Sollwerte, Ventile, Außentemperatur; so weit der Recorder zurückreicht, meist 10 Tage). Ergebnisse älterer Kalibrierläufe gehen dabei verloren; die Sicherheitsfaktoren aus dem Heizprotokoll bleiben."
+    },
+    "offset_nachtragen": {
+      "name": "Offset-Verlauf nachtragen",
+      "description": "Trägt den Offset-Verlauf eines Raums für Zeiten nach, die der Recorder nicht kennt (vor dem Offset-Sensor). Das Lernen aus der Historie rechnet die Temperaturen damit um. Ersetzt die bisher nachgetragenen Einträge des Raums; eine leere Liste entfernt sie.",
+      "fields": {
+        "raum": {
+          "name": "Raum",
+          "description": "Raumname wie in Nextcloud."
+        },
+        "verlauf": {
+          "name": "Verlauf",
+          "description": "Liste aus {ab: Zeitpunkt, offset: K}; jeder Offset gilt ab seinem Zeitpunkt bis zum nächsten."
+        }
+      }
     }
   }
 }

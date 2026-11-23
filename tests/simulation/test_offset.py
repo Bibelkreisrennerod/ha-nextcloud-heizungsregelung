@@ -120,5 +120,21 @@ fixed = E._on_current_offset([r["r"]["NG"][0] for r in rows], [E._offset(r["r"][
 check("umgerechnet ohne Sprung", sorted(set(fixed)), [18.5])
 check("Offset gilt bis zur Aenderung (kein Hoechstalter)", fourth[-1], -1.5)
 
+
+# ---- Nachgetragener Offset-Verlauf (Dienst offset_nachtragen)
+C = importlib.import_module("nextcloud_raumbelegung.controller")
+fake = types.SimpleNamespace(rooms={"Nebenraum (groß)": None}, offset_log={}, _save=lambda: None)
+local = timezone(timedelta(hours=1))
+C.HeatingController.set_offset_log(fake, "nebenraum (gross)", [
+    (datetime(2026, 11, 22, 17, 22, tzinfo=local), -3.5),
+    (datetime(2026, 11, 1, 0, 0, tzinfo=local), 0.0),
+    (datetime(2026, 11, 22, 11, 44, tzinfo=local), -1.5),
+])
+got = C.HeatingController._offset_log_series(fake, "Nebenraum (groß)")
+check("Verlauf sortiert, UTC", [(t.strftime("%d.%m. %H:%M"), v) for t, v in got],
+      [("31.10. 23:00", 0.0), ("22.11. 10:44", -1.5), ("22.11. 16:22", -3.5)])
+C.HeatingController.set_offset_log(fake, "Nebenraum (groß)", [])
+check("leere Liste entfernt", fake.offset_log, {})
+
 print("FEHLER:", failures if failures else "keine")
 sys.exit(1 if failures else 0)

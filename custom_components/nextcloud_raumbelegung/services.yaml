@@ -32,3 +32,15 @@ kalibrierlauf:
           unit_of_measurement: h
 kalibrierlauf_abbrechen:
 aus_historie_lernen:
+offset_nachtragen:
+  fields:
+    raum:
+      required: true
+      example: "Nebenraum (groß)"
+      selector:
+        text:
+    verlauf:
+      required: true
+      example: '[{"ab": "2026-11-01 00:00", "offset": 0}, {"ab": "2026-11-22 11:44", "offset": -1.5}]'
+      selector:
+        object:

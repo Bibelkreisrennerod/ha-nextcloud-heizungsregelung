@@ -213,6 +213,20 @@
     "aus_historie_lernen": {
       "name": "Learn from history",
       "description": "Discards learned room and plant values and relearns them from the recorded history (room temperatures, setpoints, valves, outside temperature; as far back as the recorder goes, usually 10 days). Results of older calibration runs are lost; safety factors from the heating log are kept."
+    },
+    "offset_nachtragen": {
+      "name": "Record thermostat offset history",
+      "description": "Adds the offset history of a room for times the recorder does not know (before the offset sensor existed). Learning from history uses it to correct the temperatures. Replaces the entries recorded so far for the room; an empty list removes them.",
+      "fields": {
+        "raum": {
+          "name": "Room",
+          "description": "Room name as in Nextcloud."
+        },
+        "verlauf": {
+          "name": "History",
+          "description": "List of {ab: time, offset: K}; each offset applies from its time until the next."
+        }
+      }
     }
   }
 }

@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.6.3. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.6.4. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -104,6 +104,9 @@ Nextcloud direkt ab.
     („Thermostat-Offset“, in K), damit der Recorder seinen Verlauf speichert;
     das Lernen aus der Historie rechnet die gemessenen Temperaturen damit um
     (vor 0.6.3 aus dem Attribut `thermostat_offset` der Raumtemperatur).
+    Für Zeiten davor lässt sich der Verlauf mit dem Dienst
+    `offset_nachtragen` eintragen (Raum, Liste aus Zeitpunkt und Offset);
+    er gilt dort, wo der Recorder nichts hat.
     Leer, wenn die Integration ihn nicht hergibt; dann arbeitet die
     Steuerung wie bisher.
   - **Kesseldaten richtig gedeutet:** Die Kesseltemperatur aus StokerCloud

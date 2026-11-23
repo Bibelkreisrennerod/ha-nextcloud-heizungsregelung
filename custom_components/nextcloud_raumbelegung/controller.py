@@ -299,6 +299,9 @@ class HeatingController:
         self._lock = asyncio.Lock()
         self._sent: list[datetime] = []  # eigene Befehle der letzten Stunde
         self._bootstrapped = False  # schon einmal aus der Historie gelernt
+        # nachgetragener Offset-Verlauf je Raum: [[ISO-Zeit, Offset K], ...] fuer
+        # Zeiten, die der Recorder nicht kennt (vor dem Offset-Sensor)
+        self.offset_log: dict[str, list[list]] = {}
         self._learning_history = False  # Live-Messung pausiert (Historie wird gelesen)
         self._history_running = False
         self._fit_running = False
@@ -320,6 +323,7 @@ class HeatingController:
             _LOGGER.warning("Gelernte Werte nicht lesbar, beginne neu: %s", err)
             self.learner = Learner()
         self._bootstrapped = bool(data.get("bootstrapped"))
+        self.offset_log = data.get("offset_log") or {}
         if data.get("calibration"):
             # Ein Kalibrierlauf ueberlebt einen Neustart; sonst blieben seine
             # Sollwerte im Modus Manuell stehen.
@@ -356,6 +360,7 @@ class HeatingController:
             "history": self.history,
             "learner": self.learner.to_dict(),
             "bootstrapped": self._bootstrapped,
+            "offset_log": self.offset_log,
             "calibration": self.calibration.to_dict() if self.calibration else None,
         }
 
@@ -971,6 +976,28 @@ class HeatingController:
 
     # ------------------------------------------------- Lernen aus der Historie
 
+    def _offset_log_series(self, room: str) -> Series:
+        result: Series = []
+        for when, value in self.offset_log.get(room, []):
+            moment = dt_util.parse_datetime(when)
+            if moment is not None:
+                result.append((dt_util.as_utc(moment), float(value)))
+        return sorted(result)
+
+    def set_offset_log(self, room: str, entries: list[tuple[datetime, float]]) -> None:
+        """Offset-Verlauf eines Raums nachtragen (ersetzt den bisher nachgetragenen)."""
+        known = {_room_key(name): name for name in self.rooms}
+        name = known.get(_room_key(room))
+        if name is None:
+            raise HomeAssistantError(f"Raum „{room}“ ist nicht bekannt.")
+        if entries:
+            self.offset_log[name] = [
+                [dt_util.as_utc(when).isoformat(), round(float(value), 2)] for when, value in sorted(entries)
+            ]
+        else:
+            self.offset_log.pop(name, None)
+        self._save()
+
     async def async_learn_from_history(self, reset: bool = True) -> ReplayResult | None:
         """Raumtemperaturen, Sollwerte und Ventile aus dem Recorder lesen und lernen.
 
@@ -1063,6 +1090,7 @@ class HeatingController:
                     offsets=[
                         series(offset_ids[room][0]),
                         series(offset_ids[room][1], "thermostat_offset"),
+                        self._offset_log_series(room),
                     ],
                 )
                 for room, (climates, valves) in sources.items()
