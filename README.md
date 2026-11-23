@@ -10,7 +10,7 @@ Raum (`CUTYPE=ROOM`). Die eingebaute CalDAV-Integration von Home Assistant
 gibt diese Information nicht weiter, deshalb fragt diese Integration
 Nextcloud direkt ab.
 
-> Stand: Version 0.6.2. Modell, Lernen und Planung sind mit Simulationen
+> Stand: Version 0.6.3. Modell, Lernen und Planung sind mit Simulationen
 > getestet, der Betrieb mit echten Thermostaten steht noch aus.
 
 ## Was die Steuerung macht
@@ -100,9 +100,12 @@ Nextcloud direkt ab.
     Homematic IP Cloud gelesen und mit jedem Messpunkt gespeichert. Wird er
     verstellt, rechnet die Anpassung die früheren Messpunkte auf den neuen
     Offset um, statt einen Temperatursprung zu lernen; das gilt auch für
-    0,5-K-Schritte. Der gelesene Wert steht im Attribut `thermostat_offset`
-    der Raumtemperatur („nicht lesbar“, wenn die Integration ihn nicht
-    hergibt; dann arbeitet die Steuerung wie bisher).
+    0,5-K-Schritte. Ab 0.6.3 ist der Offset ein eigener Sensor je Raum
+    („Thermostat-Offset“, in K), damit der Recorder seinen Verlauf speichert;
+    das Lernen aus der Historie rechnet die gemessenen Temperaturen damit um
+    (vor 0.6.3 aus dem Attribut `thermostat_offset` der Raumtemperatur).
+    Leer, wenn die Integration ihn nicht hergibt; dann arbeitet die
+    Steuerung wie bisher.
   - **Kesseldaten richtig gedeutet:** Die Kesseltemperatur aus StokerCloud
     ist kein Vorlauf (Puffer und Mischer liegen dazwischen; die Heizkreise
     laufen nicht über die Kesselsteuerung) und wird nicht mehr als Vorlauf

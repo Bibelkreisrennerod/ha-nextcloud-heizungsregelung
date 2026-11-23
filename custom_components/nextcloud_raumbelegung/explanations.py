@@ -19,6 +19,10 @@ EXPLANATIONS: dict[str, str] = {
     "heating_demand": "An, solange die Steuerung den Raum aufheizt oder warm hält (Komfort-Sollwert). Attribut „zieltemperatur“: Ziel des laufenden oder nächsten Termins, „ziel_grund“ sagt, woher es kommt (Regel, Angabe im Termin oder Komforttemperatur des Raums).",
     "occupied": "An während eines Termins im Nextcloud-Kalender, der diesen Raum belegt.",
     "room_temperature": "Gemessene Raumtemperatur, gemittelt über die Heizgruppen des Raums.",
+    "thermostat_offset": "Am Thermostat eingestellter Temperatur-Offset (Homematic-App), aus Homematic IP Cloud "
+    "gelesen. Die angezeigte Raumtemperatur enthält ihn schon. Wird er verstellt, rechnet die "
+    "Modellanpassung frühere Messpunkte auf den neuen Offset um; der Verlauf dient beim Lernen aus der "
+    "Historie zum Umrechnen. Leer, wenn er sich nicht lesen lässt.",
     "setpoint": "Sollwert, den die Steuerung gerade für diesen Raum vorsieht (Komfort, Vorstufe oder Absenkung).",
     "valve": (
         "Mittlere Öffnung der Heizkörperventile in Prozent, wie die Thermostate sie melden. "

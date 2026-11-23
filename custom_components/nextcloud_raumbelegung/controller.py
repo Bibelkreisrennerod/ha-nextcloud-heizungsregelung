@@ -85,6 +85,7 @@ from .const import (
     SOURCE_ALERT_AFTER,
 )
 from .history import ReplayResult, RoomSeries, Series, replay
+from .ids import room_unique_id
 from .homematic import climate_offsets
 from .learning import Learner, RoomSample, flow_share
 from .physics import PlantParams, PlantState, RoomParams, plant_step, solo_minutes, valve
@@ -1006,9 +1007,19 @@ class HeatingController:
             )
             # nur ein echter Vorlauf-Sensor; die Kesseltemperatur ist kein Vorlauf
             flow_id = self.entry.options.get(CONF_FLOW_SENSOR)
+            # Offset-Verlauf: eigener Sensor (ab 0.6.3), davor Attribut der Raumtemperatur (0.6.2)
+            registry = er.async_get(self.hass)
+            offset_ids: dict[str, tuple[str | None, str | None]] = {
+                room: (
+                    registry.async_get_entity_id("sensor", DOMAIN, room_unique_id(self.entry, room, "thermostat_offset")),
+                    registry.async_get_entity_id("sensor", DOMAIN, room_unique_id(self.entry, room, "room_temperature")),
+                )
+                for room in sources
+            }
             entity_ids = sorted(
                 {e for climates, valves in sources.values() for e in climates + valves}
                 | {e for e in (outside_id, flow_id) if e}
+                | {e for pair in offset_ids.values() for e in pair if e}
             )
             if not entity_ids:
                 return None
@@ -1049,6 +1060,10 @@ class HeatingController:
                     targets=[series(c, "temperature") for c in climates],
                     valves=[series(v) for v in valves],
                     boosts=[boost_series(c) for c in climates],
+                    offsets=[
+                        series(offset_ids[room][0]),
+                        series(offset_ids[room][1], "thermostat_offset"),
+                    ],
                 )
                 for room, (climates, valves) in sources.items()
             }

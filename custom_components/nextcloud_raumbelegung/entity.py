@@ -14,13 +14,7 @@ from homeassistant.util import slugify
 
 from .const import DOMAIN
 from .explanations import Explained
-
-
-def room_unique_id(entry: ConfigEntry, room: str | None, key: str) -> str:
-    """Eindeutige Kennung einer Entitaet (room=None: Anlage)."""
-    if room is None:
-        return f"{entry.entry_id}_global_{key}"
-    return f"{entry.entry_id}_{slugify(room)}_{key}"
+from .ids import room_unique_id  # noqa: F401  (weiter hier importierbar)
 
 
 def room_device_info(entry: ConfigEntry, room: str | None) -> DeviceInfo:

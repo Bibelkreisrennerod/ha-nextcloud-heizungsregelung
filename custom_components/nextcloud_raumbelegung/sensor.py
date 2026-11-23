@@ -33,6 +33,7 @@ async def async_setup_entry(
             WarmAtSensor(entry, room),
             SetpointSensor(entry, room),
             RoomTemperatureSensor(entry, room),
+            ThermostatOffsetSensor(entry, room),
             ValveSensor(entry, room),
             CoolingRateSensor(entry, room),
             HeatingRateSensor(entry, room),
@@ -179,6 +180,27 @@ class RoomTemperatureSensor(StatusEntity, SensorEntity):
         # am Thermostat eingestellter Offset (K); "nicht lesbar", wenn er sich nicht lesen laesst
         offset = self._status.get("offset")
         return {"thermostat_offset": "nicht lesbar" if offset is None else round(offset, 1)}
+
+
+class ThermostatOffsetSensor(StatusEntity, SensorEntity):
+    """Am Thermostat eingestellter Temperatur-Offset (aus Homematic IP Cloud gelesen).
+
+    Eigene Entitaet, damit der Recorder den Verlauf speichert: das Lernen aus der
+    Historie rechnet damit die gemessenen Temperaturen um.
+    """
+
+    _attr_native_unit_of_measurement = "K"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 1
+    _attr_icon = "mdi:thermometer-plus"
+
+    def __init__(self, entry: ConfigEntry, room: str) -> None:
+        super().__init__(entry, room, "thermostat_offset")
+
+    @property
+    def native_value(self) -> float | None:
+        offset = self._status.get("offset")
+        return None if offset is None else round(offset, 2)
 
 
 class ValveSensor(StatusEntity, SensorEntity):

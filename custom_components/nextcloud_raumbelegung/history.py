@@ -34,6 +34,7 @@ class RoomSeries:
     targets: list[Series] = field(default_factory=list)  # je Heizgruppe: Sollwert
     valves: list[Series] = field(default_factory=list)  # je Ventilsensor: Stellung in %
     boosts: list[Series] = field(default_factory=list)  # je Heizgruppe: 1 = Boost aktiv
+    offsets: list[Series] = field(default_factory=list)  # Thermostat-Offset (K), wo aufgezeichnet
 
 
 @dataclass
@@ -47,9 +48,10 @@ class ReplayResult:
 class _Cursor:
     """Liest eine Zeitreihe als Treppenfunktion (letzter Wert bis zum Zeitpunkt)."""
 
-    def __init__(self, series: Series) -> None:
+    def __init__(self, series: Series, max_age: timedelta | None = MAX_AGE) -> None:
         self._series = series
         self._index = -1
+        self._max_age = max_age
 
     def at(self, moment: datetime) -> float | None:
         series = self._series
@@ -58,7 +60,7 @@ class _Cursor:
         if self._index < 0:
             return None
         when, value = series[self._index]
-        return value if moment - when <= MAX_AGE else None
+        return value if self._max_age is None or moment - when <= self._max_age else None
 
 
 def _mean(values: list[float | None]) -> float | None:
@@ -92,6 +94,7 @@ def replay(
             [_Cursor(s) for s in series.targets],
             [_Cursor(s) for s in series.valves],
             [_Cursor(s) for s in series.boosts],
+            [_Cursor(s, max_age=None) for s in series.offsets],  # Einstellung: gilt bis zur Aenderung
         )
         for name, series in rooms.items()
     }
@@ -105,7 +108,7 @@ def replay(
     while moment <= end:
         samples: dict[str, RoomSample] = {}
         demand = 0.0
-        for name, (temps, targets, valves, boosts) in cursors.items():
+        for name, (temps, targets, valves, boosts, offsets) in cursors.items():
             temp = _mean([c.at(moment) for c in temps])
             target = _mean([c.at(moment) for c in targets])
             if temp is None:
@@ -117,7 +120,10 @@ def replay(
             elif target is not None:
                 opening = valve(target, temp, learner.curve(name))
             forced = any((c.at(moment) or 0.0) > 0.5 for c in boosts)
-            samples[name] = RoomSample(moment, temp, opening, target, measured=measured, forced=forced)
+            offset = next((v for v in (c.at(moment) for c in offsets) if v is not None), None)
+            samples[name] = RoomSample(
+                moment, temp, opening, target, measured=measured, forced=forced, offset=offset
+            )
             demand += learner.room_params(name, prior_minutes.get(name, 120.0)).demand(opening or 0.0)
         gauge.e = min(gauge.e, plant.e_buf)
         _, share = plant_step(demand, plant, gauge, hours)

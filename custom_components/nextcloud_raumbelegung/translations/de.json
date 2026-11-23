@@ -91,6 +91,9 @@
       "room_temperature": {
         "name": "Raumtemperatur"
       },
+      "thermostat_offset": {
+        "name": "Thermostat-Offset"
+      },
       "protocol": {
         "name": "Heizprotokoll"
       },

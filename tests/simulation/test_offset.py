@@ -101,5 +101,24 @@ for i in range(4):
     lr._windows.setdefault("NG", __import__("collections").deque(maxlen=20)).append(sample)
 check("Fenster ohne Sprung", [s.temp for s in lr._windows["NG"]], [18.5, 18.5, 18.5, 18.5])
 
+
+# ---- Lernen aus der Historie: Offset-Verlauf wird mitgegeben
+Hi = importlib.import_module("nextcloud_raumbelegung.history")
+P = importlib.import_module("nextcloud_raumbelegung.physics")
+start = datetime(2026, 11, 22, 10, 0, tzinfo=timezone.utc)
+end = start + timedelta(hours=4)
+# Fuehler zeigt 20,0; um 11:45 Offset 0 -> -1,5: Anzeige springt auf 18,5
+temps = [(start, 20.0), (start + timedelta(minutes=105), 18.5)]
+offsets = [(start + timedelta(minutes=5), 0.0), (start + timedelta(minutes=105), -1.5)]  # erst ab 10:05 aufgezeichnet
+series = Hi.RoomSeries(temps=[temps], targets=[[(start, 14.0)]], valves=[[(start, 0.0)]], boosts=[[]], offsets=[[], offsets])
+lr2 = L.Learner()
+Hi.replay(lr2, {"NG": series}, [(start, 5.0)], [], start, end, {"NG": 120.0}, P.PlantParams())
+rows = lr2._rows
+fourth = [r["r"]["NG"][3] for r in rows]
+check("Offset in Messpunkten", (fourth[0], fourth[10], fourth[-1]), (0.0, 0.0, -1.5))
+fixed = E._on_current_offset([r["r"]["NG"][0] for r in rows], [E._offset(r["r"]["NG"]) for r in rows])
+check("umgerechnet ohne Sprung", sorted(set(fixed)), [18.5])
+check("Offset gilt bis zur Aenderung (kein Hoechstalter)", fourth[-1], -1.5)
+
 print("FEHLER:", failures if failures else "keine")
 sys.exit(1 if failures else 0)

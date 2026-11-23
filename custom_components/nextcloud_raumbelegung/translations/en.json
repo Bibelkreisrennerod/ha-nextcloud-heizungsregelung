@@ -87,6 +87,9 @@
       "room_temperature": {
         "name": "Room temperature"
       },
+      "thermostat_offset": {
+        "name": "Thermostat offset"
+      },
       "protocol": {
         "name": "Heating log"
       },

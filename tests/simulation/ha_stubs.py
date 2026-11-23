@@ -6,6 +6,7 @@ def mod(name):
     m=types.ModuleType(name); sys.modules[name]=m; return m
 ha=mod("homeassistant")
 for n in ["components","helpers","util"]: mod("homeassistant."+n)
+sys.modules["homeassistant.util"].slugify=lambda t: "".join(ch if ch.isalnum() else "_" for ch in t.lower()).strip("_")
 pn=mod("homeassistant.components.persistent_notification")
 NOTES={}
 def async_create(hass,message,title=None,notification_id=None): NOTES[notification_id]=(title,message)
